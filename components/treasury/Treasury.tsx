@@ -1,0 +1,383 @@
+
+import React, { useMemo, useState } from 'react';
+import { TreasuryTransaction } from '../../types';
+import SectionHeader from '../shared/SectionHeader';
+import { formatDateTime, formatCurrency } from '../../lib/utils';
+import useStore from '../../lib/store';
+import Modal from '../shared/Modal';
+import AdminPasswordModal from '../shared/AdminPasswordModal';
+
+interface TreasuryProps {
+    treasury: TreasuryTransaction[];
+}
+
+const Treasury: React.FC<TreasuryProps> = ({ treasury }) => {
+    const { addTreasuryTransaction, clearTreasury, deleteTreasuryTransaction, appData, fetchDataByDateRange } = useStore();
+    const [filters, setFilters] = useState({ dateFrom: '', dateTo: '', type: '' });
+    const [filterPeriod, setFilterPeriod] = useState<'daily' | 'monthly' | 'yearly'>('daily');
+    
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [withdrawAmount, setWithdrawAmount] = useState<string>('');
+    const [error, setError] = useState('');
+    
+    const [isLiquidateModalOpen, setIsLiquidateModalOpen] = useState(false);
+    const [liquidateAmount, setLiquidateAmount] = useState<string>('');
+    const [liquidateError, setLiquidateError] = useState('');
+
+    const [showSecurityCheck, setShowSecurityCheck] = useState(false);
+    const [securityAction, setSecurityAction] = useState<'setBalance' | 'deleteTransaction' | null>(null);
+    const [transactionToDelete, setTransactionToDelete] = useState<number | string | null>(null);
+
+    const processedTransactions = useMemo(() => {
+        let balance = 0;
+        let cashBalance = 0;
+        let electronicBalance = 0;
+        // Sort by date ascending to calculate running balance correctly
+        const sorted = [...treasury].sort((a, b) => {
+             const dateA = new Date(a.date).getTime();
+             const dateB = new Date(b.date).getTime();
+             return dateA - dateB || (Number(a.id) - Number(b.id));
+        });
+        
+        return sorted.map(t => {
+                balance += (t.amountIn || 0) - (t.amountOut || 0);
+                if (t.paymentMethod === 'electronic') {
+                    electronicBalance += (t.amountIn || 0) - (t.amountOut || 0);
+                } else {
+                    cashBalance += (t.amountIn || 0) - (t.amountOut || 0);
+                }
+                return { ...t, balance, cashBalance, electronicBalance };
+            });
+    }, [treasury]);
+
+    const filteredTransactions = useMemo(() => {
+        // Filter first, then reverse for display (newest first)
+        const filtered = processedTransactions.filter(t => {
+            const date = new Date(t.date);
+            // Reset time part for accurate date comparison
+            date.setHours(0, 0, 0, 0);
+            
+            const from = filters.dateFrom ? new Date(filters.dateFrom) : null;
+            if (from) from.setHours(0, 0, 0, 0);
+            
+            const to = filters.dateTo ? new Date(filters.dateTo) : null;
+            if (to) to.setHours(0, 0, 0, 0);
+
+            if (from && date < from) return false;
+            if (to && date > to) return false;
+            if (filters.type && t.type !== filters.type) return false;
+
+            return true;
+        });
+        
+        return filtered.reverse();
+    }, [processedTransactions, filters]);
+    
+    const finalBalance = processedTransactions.length > 0 ? processedTransactions[processedTransactions.length - 1].balance : 0;
+    const finalCashBalance = processedTransactions.length > 0 ? processedTransactions[processedTransactions.length - 1].cashBalance : 0;
+    const finalElectronicBalance = processedTransactions.length > 0 ? processedTransactions[processedTransactions.length - 1].electronicBalance : 0;
+
+    const handleLiquidateSubmit = async (e?: React.FormEvent) => {
+        if (e) e.preventDefault();
+        const amount = parseFloat(liquidateAmount);
+        if (isNaN(amount) || amount <= 0 || amount > finalElectronicBalance) {
+             setLiquidateError('يرجى إدخال مبلغ صحيح للتسييل بحيث لا يتجاوز رصيد الدفع الإلكتروني الحالي.');
+             return;
+        }
+
+        try {
+            // Transaction 1: Out of electronic balance
+            await addTreasuryTransaction({
+                date: new Date().toISOString().split('T')[0],
+                type: 'تسييل الكتروني',
+                description: `تسييل رصيد إلكتروني إلى نقدي (خصم من الإلكتروني)`,
+                amountIn: 0,
+                amountOut: amount,
+                paymentMethod: 'electronic'
+            });
+
+            // Transaction 2: In to cash balance
+            await addTreasuryTransaction({
+                date: new Date().toISOString().split('T')[0],
+                type: 'تسييل الكتروني',
+                description: `تسييل رصيد إلكتروني إلى نقدي (إضافة للنقدي)`,
+                amountIn: amount,
+                amountOut: 0,
+                paymentMethod: 'cash'
+            });
+
+            setIsLiquidateModalOpen(false);
+            setLiquidateAmount('');
+            setLiquidateError('');
+            alert('تم عمل تسييل إلكتروني بنجاح وتحويل الرصيد إلى نقدي');
+        } catch (e) {
+            console.error(e);
+            setLiquidateError('حدث خطأ أثناء إجراء التسييل');
+        }
+    };
+
+    const handleSetBalance = async (e?: React.FormEvent) => {
+        if (e) e.preventDefault();
+        const amount = parseFloat(withdrawAmount);
+        if (isNaN(amount) || amount <= 0 || amount > finalBalance) {
+             setError('يرجى إدخال مبلغ صحيح للسحب، بحيث لا يتجاوز الرصيد الحالي.');
+             return;
+        }
+        setSecurityAction('setBalance');
+        setShowSecurityCheck(true);
+    };
+
+    const executeSetBalance = async () => {
+        const amount = parseFloat(withdrawAmount);
+        try {
+            await addTreasuryTransaction({
+                date: new Date().toISOString(),
+                type: 'مصروف آخر',
+                description: 'سحب من الرصيد',
+                amountIn: 0,
+                amountOut: amount,
+                paymentMethod: 'cash'
+            });
+            setIsModalOpen(false);
+            setWithdrawAmount('');
+            setError('');
+        } catch (e) {
+            console.error(e);
+            setError('حدث خطأ أثناء إجراء السحب');
+        }
+    };
+
+    const handleDelete = async (id: number | string) => {
+        if (window.confirm('هل أنت متأكد من حذف هذه المعاملة؟ لا يمكن التراجع عن هذا الإجراء.')) {
+            setTransactionToDelete(id);
+            setSecurityAction('deleteTransaction');
+            setShowSecurityCheck(true);
+        }
+    };
+
+    const executeDeleteTransaction = async () => {
+        if (transactionToDelete !== null) {
+            try {
+                await deleteTreasuryTransaction(transactionToDelete);
+            } catch (e) {
+                console.error(e);
+                alert('حدث خطأ أثناء الحذف');
+            } finally {
+                setTransactionToDelete(null);
+            }
+        }
+    };
+
+    const handleSecuritySuccess = () => {
+        setShowSecurityCheck(false);
+        if (securityAction === 'setBalance') {
+            executeSetBalance();
+        } else if (securityAction === 'deleteTransaction') {
+            executeDeleteTransaction();
+        }
+        setSecurityAction(null);
+    };
+
+    return (
+        <div className="animate-fade-in space-y-6">
+            <SectionHeader icon="fa-cash-register" title="الخزينة" />
+            
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg flex justify-between items-center">
+                <div className="flex gap-8">
+                    <div>
+                        <h3 className="text-xl font-bold text-gray-800 dark:text-white">الرصيد الحالي للخزينة</h3>
+                        <p className={`text-4xl font-bold mt-2 ${finalBalance >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                            {formatCurrency(finalBalance)}
+                        </p>
+                    </div>
+                    <div>
+                        <h3 className="text-sm font-bold text-gray-500 dark:text-gray-400">رصيد الدفع النقدي</h3>
+                        <p className={`text-xl font-bold mt-1 ${finalCashBalance >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                            {formatCurrency(finalCashBalance)}
+                        </p>
+                    </div>
+                    <div>
+                        <h3 className="text-sm font-bold text-gray-500 dark:text-gray-400">رصيد الدفع الإلكتروني</h3>
+                        <p className={`text-xl font-bold mt-1 ${finalElectronicBalance >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                            {formatCurrency(finalElectronicBalance)}
+                        </p>
+                    </div>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                    <button 
+                        onClick={() => setIsLiquidateModalOpen(true)}
+                        className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 transition shadow-md flex items-center gap-2"
+                    >
+                        <i className="fas fa-exchange-alt"></i>
+                        تسييل إلكتروني لنقدي
+                    </button>
+                    <button 
+                        onClick={() => setIsModalOpen(true)}
+                        className="bg-primary text-white px-4 py-2 rounded hover:bg-primary-dark transition shadow-md flex items-center gap-2"
+                    >
+                        <i className="fas fa-hand-holding-usd"></i>
+                        سحب الرصيد
+                    </button>
+                </div>
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg flex flex-col md:flex-row gap-4 flex-wrap">
+                <select value={filterPeriod} onChange={e => {
+                    setFilterPeriod(e.target.value as any);
+                    if (e.target.value === 'daily') {
+                        setFilters(f => ({ ...f, dateFrom: new Date().toISOString().split('T')[0], dateTo: new Date().toISOString().split('T')[0] }));
+                    } else if (e.target.value === 'monthly') {
+                        const now = new Date();
+                        const start = new Date(now.getFullYear(), now.getMonth(), 1);
+                        const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                        setFilters(f => ({ ...f, dateFrom: start.toISOString().split('T')[0], dateTo: end.toISOString().split('T')[0] }));
+                    } else if (e.target.value === 'yearly') {
+                        const now = new Date();
+                        const start = new Date(now.getFullYear(), 0, 1);
+                        const end = new Date(now.getFullYear(), 11, 31);
+                        setFilters(f => ({ ...f, dateFrom: start.toISOString().split('T')[0], dateTo: end.toISOString().split('T')[0] }));
+                    }
+                }} className="p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600">
+                    <option value="daily">يومي</option>
+                    <option value="monthly">شهري</option>
+                    <option value="yearly">سنوي</option>
+                </select>
+                <div className="flex gap-2 items-center">
+                    <span className="text-sm text-gray-500">من:</span>
+                    <input type="date" value={filters.dateFrom} onChange={e => setFilters(f => ({ ...f, dateFrom: e.target.value }))} className="p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600" />
+                </div>
+                <div className="flex gap-2 items-center">
+                    <span className="text-sm text-gray-500">إلى:</span>
+                    <input type="date" value={filters.dateTo} onChange={e => setFilters(f => ({ ...f, dateTo: e.target.value }))} className="p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600" />
+                </div>
+                <button 
+                    onClick={() => {
+                        if (filters.dateFrom && filters.dateTo) {
+                            fetchDataByDateRange('treasury', filters.dateFrom, filters.dateTo);
+                        }
+                    }}
+                    className="px-3 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition"
+                    title="جلب بيانات من الخادم"
+                >
+                    <i className="fas fa-cloud-download-alt"></i>
+                </button>
+                <select value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value }))} className="p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 flex-grow">
+                    <option value="">كل الأنواع</option>
+                    <option value="إيراد مبيعات">إيراد مبيعات</option>
+                    <option value="مرتجع مبيعات">مرتجع مبيعات</option>
+                    <option value="مصروف">مصروف</option>
+                    <option value="راتب">راتب</option>
+                    <option value="دفعة لمورد">دفعة لمورد</option>
+                    <option value="سلفة">سلفة</option>
+                    <option value="سداد سلفة">سداد سلفة</option>
+                    <option value="إيراد آخر">إيراد آخر</option>
+                    <option value="مصروف آخر">مصروف آخر</option>
+                </select>
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-x-auto">
+                <table className="w-full text-sm text-right text-gray-500 dark:text-gray-400">
+                    <thead className="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-300">
+                        <tr>
+                            <th className="px-6 py-3">التاريخ والوقت</th>
+                            <th className="px-6 py-3">النوع</th>
+                            <th className="px-6 py-3">الوصف</th>
+                            <th className="px-6 py-3">الوارد</th>
+                            <th className="px-6 py-3">المنصرف</th>
+                            <th className="px-6 py-3">الرصيد</th>
+                            <th className="px-6 py-3">الإجراءات</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {filteredTransactions.map(t => (
+                            <tr key={t.id} className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
+                                <td className="px-6 py-4 whitespace-nowrap" dir="ltr">{formatDateTime(t.date, t.timestamp)}</td>
+                                <td className="px-6 py-4">{t.type}</td>
+                                <td className="px-6 py-4 font-medium text-gray-900 dark:text-white">{t.description}</td>
+                                <td className="px-6 py-4 text-green-500 font-semibold">{t.amountIn > 0 ? formatCurrency(t.amountIn) : '-'}</td>
+                                <td className="px-6 py-4 text-red-500 font-semibold">{t.amountOut > 0 ? formatCurrency(t.amountOut) : '-'}</td>
+                                <td className="px-6 py-4 font-bold">{formatCurrency(t.balance)}</td>
+                                <td className="px-6 py-4">
+                                    <button onClick={() => handleDelete(t.id)} className="text-red-500 hover:text-red-700" title="حذف المعاملة">
+                                        <i className="fas fa-trash"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+
+            {isModalOpen && (
+                <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="سحب الرصيد" onSave={handleSetBalance} saveLabel="تأكيد السحب">
+                    <div className="space-y-4">
+                        <p className="text-gray-600 dark:text-gray-300">
+                            أدخل المبلغ الذي تود سحبه من الخزينة. سيتم تسجيل كمعاملة سحب/مصروف.
+                        </p>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">المبلغ المراد سحبه</label>
+                            <input 
+                                type="number" 
+                                value={withdrawAmount} 
+                                onChange={e => setWithdrawAmount(e.target.value)}
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600"
+                                placeholder="0"
+                             />
+                        </div>
+                        <button 
+                            type="button" 
+                            onClick={() => setWithdrawAmount(finalBalance.toString())}
+                            className="bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-4 py-2 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition text-sm"
+                        >
+                            سحب كل الرصيد ({formatCurrency(finalBalance)})
+                        </button>
+                        {error && <p className="text-red-500 text-sm">{error}</p>}
+                    </div>
+                </Modal>
+            )}
+
+            {isLiquidateModalOpen && (
+                <Modal isOpen={isLiquidateModalOpen} onClose={() => setIsLiquidateModalOpen(false)} title="تسييل رصيد إلكتروني لنقدي" onSave={handleLiquidateSubmit} saveLabel="تأكيد التسييل">
+                    <div className="space-y-4">
+                        <p className="text-gray-600 dark:text-gray-300 font-medium">
+                            سيقوم هذا الإجراء بخصم مبلغ من رصيد الدفع الإلكتروني المتاح وإضافته مباشرة إلى رصيد الدفع النقدي في الخزينة.
+                        </p>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">المبلغ المراد تحويله لنقدي *</label>
+                            <input 
+                                type="number" 
+                                value={liquidateAmount} 
+                                onChange={e => setLiquidateAmount(e.target.value)}
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 text-lg font-bold"
+                                placeholder="0"
+                                required
+                            />
+                        </div>
+                        <button 
+                            type="button" 
+                            onClick={() => setLiquidateAmount(finalElectronicBalance.toString())}
+                            className="bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-4 py-2 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition text-sm"
+                        >
+                            تسييل كل الرصيد الإلكتروني ({formatCurrency(finalElectronicBalance)})
+                        </button>
+                        {liquidateError && <p className="text-red-500 text-sm font-semibold">{liquidateError}</p>}
+                    </div>
+                </Modal>
+            )}
+
+            {showSecurityCheck && (
+                <AdminPasswordModal
+                    isOpen={showSecurityCheck}
+                    onClose={() => {
+                        setShowSecurityCheck(false);
+                        setSecurityAction(null);
+                    }}
+                    onSuccess={handleSecuritySuccess}
+                    actionDescription={securityAction === 'setBalance' ? 'ضبط رصيد الخزينة' : 'حذف معاملة'}
+                />
+            )}
+        </div>
+    );
+};
+
+export default Treasury;

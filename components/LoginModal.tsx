@@ -1,0 +1,199 @@
+
+
+import React, { useState } from 'react';
+import useStore from '../lib/store';
+import { getStoreBranding } from '../lib/appConfig';
+import { resolveTenantBrandId } from '../lib/tenantBootstrap';
+
+interface LoginModalProps {
+    setViewMode?: (mode: 'store' | 'admin') => void;
+}
+
+const LoginModal: React.FC<LoginModalProps> = ({ setViewMode }) => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const { login, storefrontSettings } = useStore(state => ({
+        login: state.login,
+        storefrontSettings: state.appData?.storefrontSettings,
+    }));
+    const branding = getStoreBranding(storefrontSettings, 'نظام إدارة المتجر');
+    const brandSlug = resolveTenantBrandId();
+
+    const [showPassword, setShowPassword] = useState(false);
+
+    const handleMasterSsoLogin = async () => {
+        if (!brandSlug) return;
+        setError('');
+        setIsLoading(true);
+        try {
+            const masterToken = localStorage.getItem('t2os_admin_token');
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (masterToken) headers.Authorization = `Bearer ${masterToken}`;
+            const res = await fetch('/api/tenant-auth?action=sso-master', {
+                method: 'POST',
+                credentials: 'include',
+                headers,
+                body: JSON.stringify({ action: 'sso-master', brandSlug }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data?.ok || !data?.token || !data?.user) {
+                setError(data?.error || 'يجب تسجيل الدخول كـ Master Admin في المنظومة أولاً.');
+                return;
+            }
+            try {
+                localStorage.setItem(`t2_tenant_session_${brandSlug}`, JSON.stringify({ token: data.token, user: data.user }));
+            } catch {}
+            useStore.getState().setCurrentUser(data.user);
+        } catch {
+            setError('تعذر الاتصال بخدمة التوثيق التلقائي.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+        setIsLoading(true);
+        try {
+            await login(email, password);
+            // The onAuthStateChanged listener in App.tsx will handle the rest.
+        } catch (error: any) {
+             if (error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
+                setError('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
+            } else {
+                setError('حدث خطأ أثناء تسجيل الدخول. يرجى المحاولة مرة أخرى.');
+            }
+            console.error("Login failed:", error);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleBiometricLogin = async () => {
+        if (!window.PublicKeyCredential) {
+            setError('متصفحك لا يدعم تسجيل الدخول بالبصمة');
+            return;
+        }
+        try {
+            setIsLoading(true);
+            setError('');
+            // Simple mock of WebAuthn for demonstration purposes
+            const challenge = new Uint8Array(32);
+            window.crypto.getRandomValues(challenge);
+            
+            const assertion = await navigator.credentials.get({
+                publicKey: {
+                    challenge: challenge,
+                    rpId: window.location.hostname,
+                    userVerification: "preferred",
+                }
+            });
+            
+            if (assertion) {
+                // In a complete implementation, this would be validated by the server and login user
+                alert('هذا المتصفح يدعم البصمة وتم التحقق. لتفعيل تسجيل الدخول بها، يرجى ربطها بحسابك من الإعدادات لاحقاً.');
+            }
+        } catch (err: any) {
+            // Provide a user friendly error
+            if (err.name === 'NotAllowedError') {
+                setError('تم إلغاء عملية قراءة البصمة أو غير مصرح بها.');
+            } else {
+                setError('لم يتم التعرف على البصمة أو غير مسجلة.');
+            }
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 backdrop-blur-sm">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-sm p-8 m-4 animate-fade-in-down">
+                <div className="text-center mb-6">
+                    <img src={branding.logoUrl || "https://i.ibb.co/LDdGwd87/5-1.png"} alt={branding.companyName} className="h-20 w-20 object-cover rounded-2xl mx-auto mb-3 shadow-md" />
+                    <h3 className="text-xl font-black text-gray-800 dark:text-white">🔐 إدارة {branding.companyName}</h3>
+                </div>
+                <form onSubmit={handleSubmit} className="space-y-6">
+                    <div>
+                        <label htmlFor="loginEmail" className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">👤 البريد الإلكتروني</label>
+                        <input
+                            type="email"
+                            id="loginEmail"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-primary focus:border-primary transition"
+                            required
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="loginPassword"className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">🔑 كلمة المرور</label>
+                        <div className="relative">
+                            <input
+                                type={showPassword ? "text" : "password"}
+                                id="loginPassword"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-primary focus:border-primary transition"
+                                required
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword(!showPassword)}
+                                className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                            >
+                                <i className={`fas ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                            </button>
+                        </div>
+                    </div>
+                    {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+                    <div className="space-y-3">
+                        <button type="submit" disabled={isLoading} className="w-full flex justify-center items-center gap-2 px-4 py-3 text-white bg-gradient-to-r from-primary to-primary-light rounded-lg hover:from-primary-dark hover:to-primary transition-transform transform hover:scale-105 shadow-md disabled:opacity-50 disabled:cursor-not-allowed">
+                            {isLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-sign-in-alt"></i>}
+                            <span>{isLoading ? 'جاري الدخول...' : 'تسجيل الدخول'}</span>
+                        </button>
+
+                        {brandSlug && (
+                            <button
+                                type="button"
+                                onClick={handleMasterSsoLogin}
+                                disabled={isLoading}
+                                className="w-full flex justify-center items-center gap-2 px-4 py-3 text-slate-950 bg-emerald-400 hover:bg-emerald-300 font-black rounded-lg shadow-md transition disabled:opacity-50 text-sm"
+                            >
+                                <i className="fas fa-bolt"></i>
+                                <span>دخول سريع (مالك المتجر / الماستر T2OS)</span>
+                            </button>
+                        )}
+                        
+                        {window.PublicKeyCredential && (
+                            <button 
+                                type="button" 
+                                onClick={handleBiometricLogin}
+                                disabled={isLoading} 
+                                className="w-full flex justify-center items-center gap-2 px-4 py-3 text-primary border border-primary bg-white dark:bg-gray-800 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+                            >
+                                <i className="fas fa-fingerprint text-xl"></i>
+                                <span>تسجيل الدخول بالبصمة</span>
+                            </button>
+                        )}
+                    </div>
+                    {setViewMode && (
+                        <div className="mt-4 text-center">
+                            <button 
+                                type="button" 
+                                onClick={() => setViewMode('store')} 
+                                className="text-primary hover:text-primary-dark font-medium transition-colors flex items-center justify-center gap-2 w-full"
+                            >
+                                <i className="fas fa-store"></i>
+                                العودة للمتجر
+                            </button>
+                        </div>
+                    )}
+                </form>
+            </div>
+        </div>
+    );
+};
+
+export default LoginModal;

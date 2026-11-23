@@ -1,0 +1,537 @@
+
+
+import { Timestamp } from 'firebase/firestore';
+
+export type Branch = string;
+
+export interface BranchConfig {
+    key: Branch;
+    label: string;
+}
+
+export interface CashierConfig {
+    value: string;
+    label: string;
+}
+
+export interface StorefrontFiltersConfig {
+    showSearch?: boolean;
+    showCategoryFilter?: boolean;
+    showSubCategoryFilter?: boolean;
+    showBrandFilter?: boolean;
+    brandFilterLabel?: string;
+    brandFilterOptions?: string[];
+    showPriceFilter?: boolean;
+    showInStockOnlyFilter?: boolean;
+}
+
+export interface HeroSlideConfig {
+    id: string | number;
+    badge?: string;
+    title: string;
+    subtitle: string;
+    description: string;
+    image: string;
+    category?: string;
+}
+
+export interface ShippingZoneConfig {
+    name: string;
+    fee: number;
+}
+
+export type ShippingCarrierProvider = 'manual' | 'bosta' | 'aramex' | 'mylerz' | 'r2s' | 'turbo' | 'oto' | 'cj_auto';
+
+export type DropshippingSupplierProvider =
+    | 'cj'
+    | 'knawat'
+    | 'makhazen'
+    | 'taager'
+    | 'local_wholesale'
+    | 'workshop';
+
+export interface ExpressCodTier {
+    qty: number;
+    label: string;
+    badge?: string;
+    sellingPriceEgp: number;
+    freeShipping: boolean;
+}
+
+export interface SplitSubOrder {
+    subOrderId: string;
+    supplierProvider: DropshippingSupplierProvider;
+    supplierId: string;
+    supplierName: string;
+    supplierWhatsapp: string;
+    warehouseRegion: string;
+    items: Array<{
+        productId: number | string;
+        sku: string;
+        productName: string;
+        qty: number;
+        unitPriceEgp: number;
+        supplierCostEgp: number;
+    }>;
+    supplierCostTotalEgp: number;
+    codCollectionEgp: number;
+    carrierProvider: ShippingCarrierProvider | 'manual_whatsapp';
+    trackingNumber: string | null;
+    trackingUrl?: string | null;
+    dispatchMode?: string;
+    status: string;
+    dispatchedAt?: string;
+}
+
+export interface ShippingCarrierConfig {
+    provider: ShippingCarrierProvider;
+    enabled: boolean;
+    apiKey?: string;
+    accountNumber?: string;
+    businessLocationId?: string;
+    senderName?: string;
+    senderPhone?: string;
+    senderAddress?: string;
+}
+
+export interface PaymobConfig {
+    enabled: boolean;
+    configured?: boolean;
+    apiKey?: string;
+    integrationId?: string;
+    iframeId?: string;
+    hmacSecret?: string;
+}
+
+export interface PaymentGatewaysConfig {
+    enableCod?: boolean;
+    enableManualElectronic?: boolean;
+    paymob?: PaymobConfig;
+}
+
+export interface ShippingConfig {
+    defaultFee: number;
+    freeShippingThreshold: number;
+    zones: ShippingZoneConfig[];
+    carrierIntegration?: ShippingCarrierConfig;
+}
+
+export interface AppCustomization {
+    activeBranches?: BranchConfig[];
+    cashiers?: CashierConfig[];
+    mainCategories?: string[];
+    subCategories?: Record<string, string[]>;
+    storefrontFilters?: StorefrontFiltersConfig;
+    heroSlides?: HeroSlideConfig[];
+    shipping?: ShippingConfig;
+    paymentGateways?: PaymentGatewaysConfig;
+}
+
+export enum Role {
+    Admin = 'admin',
+    BranchManager = 'manager',
+    Seller = 'seller',
+    Accountant = 'accountant',
+    Cashier = 'cashier',
+}
+
+export enum Section {
+    Dashboard = 'dashboard',
+    Treasury = 'treasury',
+    DailySales = 'daily-sales',
+    StoreManagement = 'store-management',
+    Purchasing = 'purchasing',
+    Employees = 'employees',
+    Advances = 'advances',
+    Attendance = 'attendance',
+    Payroll = 'payroll',
+    Suppliers = 'suppliers',
+    Expenses = 'expenses',
+    DailyReview = 'daily-review',
+    Reports = 'reports',
+    Orders = 'orders',
+    Customers = 'customers',
+    Promotions = 'promotions',
+    Dropshipping = 'dropshipping',
+    Settings = 'settings',
+    Notifications = 'notifications',
+    Users = 'users',
+}
+
+export interface User {
+    id: string;
+    username: string; // email
+    name: string;
+    role: Role;
+    branch: Branch;
+    allowedBranches?: Branch[];
+    permissions: Section[];
+    password?: string; // Added to store password for display (Admin only)
+}
+
+export type MainCategory = string;
+
+export interface Product {
+    id: number;
+    name: string;
+    sku: string;
+    mainCategory: MainCategory;
+    category: string;
+    subCategory?: string;
+    brand: string;
+    countryOfOrigin?: string; // Added
+    purchasePrice: number;
+    sellingPrice: number; // Default selling price (can be retail)
+    wholesalePrice?: number; // Added
+    retailPrice?: number; // Added
+    stock: Record<string, number>;
+    reorderPoint?: number;
+    description?: string;
+    images: string[];
+    compatibility?: string[];
+    hasSerialNumber?: boolean; // Added
+    discount?: number;
+    isNew?: boolean;
+    rating?: number;
+    variants?: { name: string; options: string[] }[];
+    fulfillmentType?: 'own_stock' | 'dropshipping';
+    supplierProvider?: DropshippingSupplierProvider;
+    supplierId?: string;
+    supplierName?: string;
+    supplierWhatsapp?: string;
+    supplierSku?: string;
+    supplierCostEgp?: number;
+    warehouseRegion?: string;
+    estimatedDeliveryDays?: string;
+    expressCodTiers?: ExpressCodTier[];
+}
+
+export interface SaleItem {
+    productId: number;
+    productName?: string;
+    quantity: number;
+    unitPrice: number;
+    itemType: MainCategory | 'خدمة' | 'أخرى';
+    serialNumbers?: string[]; // Added
+    isReturn?: boolean; // Added for Exchange direction
+}
+
+export interface DailySale {
+    id: number;
+    date: string;
+    timestamp?: string;
+    invoiceNumber: string;
+    sellerId: string;
+    sellerName: string;
+    source: 'المحل' | 'أونلاين';
+    branchSoldFrom: Branch;
+    direction: 'بيع' | 'مرتجع' | 'تبديل' | 'ضمان' | 'هدية';
+    invoiceType?: 'wholesale' | 'retail'; // Added
+    discount?: number; // Added (percentage)
+    totalAmount: number;
+    notes?: string;
+    cashierLocation?: string; // Dynamic cashier identifier
+    warrantyPeriod?: string; // Added
+    paymentMethod?: 'نقدى' | 'إلكترونى' | 'مختلط' | 'آجل';
+    cashAmount?: number;
+    electronicAmount?: number;
+    customerName?: string;
+    customerPhone?: string;
+    customerAddress?: string;
+    locationLink?: string; // Added
+    deliveryFee?: number;
+    shippingZone?: string;
+    discountAmount?: number;
+    remainingDebt?: number;
+    paidAmount?: number;
+    isTaxable?: boolean;
+    taxAmount?: number;
+
+    // New multi-item structure (optional for backward compatibility)
+    items?: SaleItem[];
+
+    // Legacy single-item fields for backward compatibility
+    productId?: number;
+    quantity?: number;
+    unitPrice?: number;
+    itemType?: MainCategory | 'خدمة' | 'أخرى';
+}
+
+
+export interface Employee {
+    id: number;
+    name: string;
+    position: string;
+    basicSalary: number;
+    hireDate: string;
+    timestamp?: string;
+    phone?: string;
+    address?: string;
+    email?: string; // Added for linking to auth
+    idCardUrl?: string; // Added
+    biometricId?: string; // Added for fingerprint device alignment
+}
+
+export interface Advance {
+    id: number;
+    date: string;
+    timestamp?: string;
+    employeeId: number;
+    amount: number;
+    payment: number;
+    notes?: string;
+}
+
+export interface Attendance {
+    id: number;
+    date: string;
+    timestamp?: string;
+    employeeId: number;
+    checkIn?: string;
+    checkOut?: string;
+    daysAttended?: number;
+    notes?: string;
+}
+
+export interface Payroll {
+    id: number;
+    date: string;
+    timestamp?: string;
+    employeeId: number;
+    basicSalary: number;
+    incentives?: number; // Added
+    deductions?: number; // Added (calculated from advances/expenses)
+    advanceDeductions?: number; // Added to track how much of deductions were advances
+    expenseDeductions?: number; // Added to track how much of deductions were expenses
+    daysAttended?: number; // Added
+    periodStart?: string; // Added
+    periodEnd?: string; // Added
+    disbursed: number;
+    notes?: string;
+}
+
+export interface Supplier {
+    id: number;
+    name: string;
+    contact: string;
+    address?: string;
+}
+
+export interface PurchaseOrderItem {
+    productId: number;
+    quantity: number;
+    purchasePrice: number;
+    purchasePriceTotal?: number; // Optional helper
+}
+
+export interface PurchaseOrder {
+    id: number;
+    supplierId: number;
+    orderDate: string;
+    timestamp?: string;
+    status: 'معلق' | 'مكتمل' | 'ملغي';
+    type?: 'شراء' | 'مرتجع'; // Added for purchase returns
+    branch?: Branch;
+    items: PurchaseOrderItem[];
+    totalAmount: number;
+    notes?: string;
+}
+
+export interface Payment {
+    id: number;
+    date: string;
+    timestamp?: string;
+    supplierId: number;
+    payment: number;
+    invoiceTotal?: number;
+    purchaseOrderId?: number;
+    returnedItems?: string;
+    notes?: string;
+}
+
+export interface Expense {
+    id: number;
+    date: string;
+    timestamp?: string;
+    type: 'شخصية' | 'عامة' | 'موظفين';
+    name: string;
+    amount: number;
+    notes?: string;
+    employeeId?: number; // Added to link expense to employee for payroll
+}
+
+export interface TreasuryTransaction {
+    id: number;
+    date: string;
+    timestamp?: string;
+    type: string;
+    description: string;
+    amountIn: number;
+    amountOut: number;
+    relatedId?: number | string; // e.g., saleId, expenseId, orderId (string)
+    paymentMethod?: 'cash' | 'electronic'; // Added
+}
+
+export interface DailyReview {
+    id: number;
+    date: string;
+    timestamp?: string;
+    branch: Branch;
+    salesCash: number;
+    salesElectronic: number;
+    totalSales: number;
+    salesParts?: number;
+    salesAccessories?: number;
+    drawerBalance: number;
+    expensesTotal?: number; // Added for comprehensive review
+    onlineOrdersTotal?: number; // Added for comprehensive review
+    onlineOrdersCount?: number; // Added for comprehensive review
+    notes?: string;
+}
+
+export interface OrderItem {
+    productId: number;
+    productName: string;
+    quantity: number;
+    unitPrice: number;
+}
+
+export interface Order {
+    id: number | string;
+    date: string;
+    timestamp?: string;
+    createdAt: Timestamp; // To track new orders for notifications
+    customerName: string;
+    customerPhone: string;
+    customerAddress: string;
+    locationLink?: string; // Added
+    items: OrderItem[];
+    totalAmount: number;
+    status: 'pending' | 'confirmed' | 'shipped' | 'cancelled' | 'collected' | 'returned';
+    paymentMethod: 'cod' | 'electronic' | 'paymob';
+    paymentProofUrl?: string;
+    // New fields
+    customerId?: string; // For future use with customer accounts
+    discountCode?: string;
+    discountAmount?: number;
+    shippingCompany?: string; // Added for shipping tracking
+    carrierProvider?: ShippingCarrierProvider;
+    trackingNumber?: string; // Added for shipping tracking
+    trackingUrl?: string;
+    shippingNotes?: string; // Added for shipping tracking
+    deliveryFee?: number;
+    shippingZone?: string;
+    subOrders?: SplitSubOrder[];
+    dropshippingRefCode?: string;
+}
+
+export interface Notification {
+    id: string;
+    date: string;
+    createdAt?: Timestamp | number; // Added for sorting
+    message: string;
+    read: boolean;
+    orderId?: number | string;
+    type?: 'order' | 'system' | 'status_change'; // Added
+    targetGroup?: 'admin' | 'all' | 'customer'; // Added
+}
+
+export interface Broadcast {
+    id: string;
+    message: string;
+    date: string;
+    sentBy: string;
+}
+
+export interface StorefrontSettings {
+    featuredProductIds: number[];
+    newArrivalProductIds: number[];
+    adminPassword?: string;
+    tickerMessages?: string[]; // Added
+    companyName?: string;
+    slogan?: string;
+    logoUrl?: string;
+    contactPhone?: string;
+    whatsappPhone?: string;
+    contactEmail?: string;
+    address?: string;
+    primaryColor?: string;
+    metaPixelId?: string;
+    tiktokPixelId?: string;
+    googleTagId?: string;
+    snapPixelId?: string;
+    facebookUrl?: string;
+    instagramUrl?: string;
+    tiktokUrl?: string;
+    commercialRegister?: string;
+    taxCardNumber?: string;
+}
+
+export interface CartItem {
+    product: Product;
+    quantity: number;
+}
+
+export interface StockTransfer {
+    id: number;
+    date: string;
+    timestamp?: string;
+    productId: number;
+    productName: string;
+    quantity: number;
+    fromBranch: Branch;
+    toBranch: Branch;
+    notes?: string;
+}
+
+export interface DiscountCode {
+    id: string; // Use the code itself as the ID
+    code: string;
+    type: 'fixed' | 'percentage';
+    value: number;
+    minPurchase: number;
+    expiresAt: string;
+    isActive: boolean;
+}
+
+export interface Toast {
+    id: number;
+    message: string;
+    type: 'info' | 'success' | 'error';
+}
+
+export interface AppData {
+    users: User[];
+    products: Product[];
+    dailySales: DailySale[];
+    employees: Employee[];
+    advances: Advance[];
+    attendance: Attendance[];
+    payroll: Payroll[];
+    suppliers: Supplier[];
+    purchaseOrders: PurchaseOrder[];
+    payments: Payment[];
+    expenses: Expense[];
+    treasury: TreasuryTransaction[];
+    dailyReview: DailyReview[];
+    orders: Order[];
+    notifications: Notification[];
+    broadcasts: Broadcast[];
+    storefrontSettings: StorefrontSettings;
+    stockTransfers: StockTransfer[];
+    discountCodes: DiscountCode[];
+    toasts: Toast[];
+    settings: Settings;
+    appCustomization?: AppCustomization;
+}
+
+export interface Settings {
+    companyName?: string;
+    allowedIP?: string;
+    enableIPRestriction: boolean;
+    enableTimeRestriction: boolean;
+    workStartTime: string; // "09:00"
+    workEndTime: string; // "23:00"
+    electronicPaymentNumber?: string; // Added for controlling payment number
+    tickerMessages?: string[]; // Added for ticker messages
+}

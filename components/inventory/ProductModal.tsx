@@ -1,0 +1,723 @@
+
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { GoogleGenAI } from "@google/genai";
+import CreatableSelect from 'react-select/creatable';
+import { Product, MainCategory } from '../../types';
+import Modal from '../shared/Modal';
+import BarcodeScannerModal from '../shared/BarcodeScannerModal';
+import AdminPasswordModal from '../shared/AdminPasswordModal';
+import CameraCaptureModal from '../shared/CameraCaptureModal';
+import useStore from '../../lib/store';
+import {
+    getActiveBranches,
+    getMainCategories,
+    getSubCategoriesMap,
+    createEmptyStockForBranches,
+} from '../../lib/appConfig';
+
+interface ProductModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+    onSave: (product: Omit<Product, 'id'> & { id?: number }) => void;
+    existingProduct: Product | null;
+}
+
+const ProductModal: React.FC<ProductModalProps> = ({ isOpen, onClose, onSave, existingProduct }) => {
+    const { uploadImage, storefrontSettings, products, currentUser, updateProduct, appCustomization } = useStore(state => ({
+        uploadImage: state.uploadImage,
+        storefrontSettings: state.appData?.storefrontSettings,
+        products: state.appData?.products || [],
+        currentUser: state.currentUser,
+        updateProduct: state.updateProduct,
+        appCustomization: state.appData?.appCustomization,
+    }));
+
+    const activeBranches = useMemo(() => getActiveBranches(appCustomization), [appCustomization]);
+    const mainCategories = useMemo(
+        () => getMainCategories(appCustomization, products),
+        [appCustomization, products]
+    );
+    const subCategoriesMap = useMemo(() => getSubCategoriesMap(appCustomization), [appCustomization]);
+    
+    // Extract unique brands from existing products
+    const existingBrands = Array.from(new Set(products.map(p => p.brand))).map(b => ({ value: b, label: b }));
+
+    const [formData, setFormData] = useState<Omit<Product, 'id'>>({
+        name: '', sku: '', mainCategory: mainCategories[0] || 'قطع غيار', category: '', subCategory: '', brand: '', countryOfOrigin: '',
+        purchasePrice: 0, sellingPrice: 0, wholesalePrice: 0, retailPrice: 0,
+        stock: createEmptyStockForBranches(activeBranches, 0),
+        reorderPoint: 5, description: '', images: [], compatibility: [], hasSerialNumber: false, variants: [],
+    });
+    const [variantOptionDrafts, setVariantOptionDrafts] = useState<Record<number, string>>({});
+    const [isGenerating, setIsGenerating] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
+    const [imageFile, setImageFile] = useState<File | null>(null);
+    const [imagePreview, setImagePreview] = useState<string | null>(null);
+    const [securityPassword, setSecurityPassword] = useState('');
+    const [showSecurityCheck, setShowSecurityCheck] = useState(false);
+    const [securityError, setSecurityError] = useState('');
+    const [showScanner, setShowScanner] = useState(false);
+    const [showCamera, setShowCamera] = useState(false);
+
+    useEffect(() => {
+        if (existingProduct) {
+            const normalizedCategory = existingProduct.category || existingProduct.subCategory || '';
+            setFormData({
+                ...existingProduct,
+                mainCategory: (existingProduct.mainCategory as string) === 'كماليات واكسسوارات' || (existingProduct.mainCategory as string) === 'كماليات' ? 'كماليات و إكسسوارات' : existingProduct.mainCategory, // Migration helper
+                category: normalizedCategory,
+                subCategory: existingProduct.subCategory || normalizedCategory,
+                countryOfOrigin: existingProduct.countryOfOrigin || '',
+                wholesalePrice: existingProduct.wholesalePrice || 0,
+                retailPrice: existingProduct.retailPrice || existingProduct.sellingPrice || 0,
+                stock: {
+                    ...createEmptyStockForBranches(activeBranches, 0),
+                    ...(existingProduct.stock || {}),
+                },
+                reorderPoint: existingProduct.reorderPoint || 5,
+                description: existingProduct.description || '',
+                images: existingProduct.images || [],
+                compatibility: existingProduct.compatibility || [],
+                hasSerialNumber: existingProduct.hasSerialNumber || false,
+                variants: Array.isArray(existingProduct.variants) ? existingProduct.variants : [],
+            });
+            setImagePreview(existingProduct.images?.[0] || (existingProduct as any).imageUrl || null);
+        } else {
+            setFormData({
+                name: '', sku: '', mainCategory: mainCategories[0] || 'قطع غيار', category: '', subCategory: '', brand: '', countryOfOrigin: '',
+                purchasePrice: 0, sellingPrice: 0, wholesalePrice: 0, retailPrice: 0,
+                stock: createEmptyStockForBranches(activeBranches, 0),
+                reorderPoint: 5, description: '', images: [], compatibility: [], hasSerialNumber: false, variants: [],
+            });
+            setImagePreview(null);
+        }
+        setVariantOptionDrafts({});
+        setImageFile(null); // Reset file input on open
+        setShowSecurityCheck(false);
+        setSecurityPassword('');
+        setSecurityError('');
+    }, [existingProduct, isOpen]);
+
+    const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            const file = e.target.files[0];
+            setImageFile(file);
+            setImagePreview(URL.createObjectURL(file));
+        }
+    };
+    
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+        const { name, value } = e.target;
+        const isNumericField = ['purchasePrice', 'sellingPrice', 'wholesalePrice', 'retailPrice', 'reorderPoint'].includes(name);
+        setFormData(prev => ({ ...prev, [name]: isNumericField ? Number(value) : value }));
+    };
+
+    const handleBrandChange = (newValue: any) => {
+        setFormData(prev => ({ ...prev, brand: newValue ? newValue.value : '' }));
+    };
+
+    const calculatePrice = (percentage: number, field: 'sellingPrice' | 'wholesalePrice' = 'sellingPrice') => {
+        const purchase = Number(formData.purchasePrice) || 0;
+        const newPrice = purchase + (purchase * (percentage / 100));
+        setFormData(prev => ({ 
+            ...prev, 
+            [field]: parseFloat(newPrice.toFixed(2)),
+            ...(field === 'sellingPrice' ? { retailPrice: parseFloat(newPrice.toFixed(2)) } : {})
+        }));
+    };
+
+    const handleStockChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, stock: { ...prev.stock, [name]: Number(value) } }));
+    };
+
+    const generateDescription = useCallback(async () => {
+        if (!formData.name || !formData.brand) {
+            alert("يرجى إدخال اسم المنتج والماركة أولاً."); return;
+        }
+        setIsGenerating(true);
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+            const prompt = `Generate a compelling and SEO-friendly product description in Arabic for the following auto part. The tone should be professional and trustworthy, targeting car owners and mechanics in Egypt. Highlight quality and reliability. Do not use markdown.
+
+                Product Name: ${formData.name}, Brand: ${formData.brand}, Category: ${formData.category}`;
+            const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
+            setFormData(prev => ({ ...prev, description: response.text }));
+        } catch (error) {
+            console.error("Gemini description generation error:", error);
+            alert("حدث خطأ أثناء إنشاء الوصف.");
+        } finally {
+            setIsGenerating(false);
+        }
+    }, [formData.name, formData.brand, formData.category]);
+
+    const handlePreSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        // Check if price changed for an existing product
+        const priceChanged = existingProduct && (
+            existingProduct.purchasePrice !== formData.purchasePrice ||
+            existingProduct.sellingPrice !== formData.sellingPrice ||
+            existingProduct.wholesalePrice !== formData.wholesalePrice ||
+            existingProduct.retailPrice !== formData.retailPrice
+        );
+
+        if (priceChanged && storefrontSettings?.adminPassword && currentUser?.role !== 'admin') {
+            setShowSecurityCheck(true);
+        } else {
+            handleSubmit();
+        }
+    };
+
+    const handleSecuritySuccess = () => {
+        setShowSecurityCheck(false);
+        handleSubmit();
+    };
+
+    const handleCameraCapture = (file: File) => {
+        setImageFile(file);
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            setImagePreview(reader.result as string);
+        };
+        reader.readAsDataURL(file);
+    };
+
+    const handleSubmit = async () => {
+        setIsUploading(true);
+        const cleanVariants = (formData.variants || [])
+            .map(v => ({
+                name: String(v?.name || '').trim(),
+                options: Array.isArray(v?.options)
+                    ? v.options.map(o => String(o || '').trim()).filter(Boolean)
+                    : [],
+            }))
+            .filter(v => v.name && v.options.length > 0);
+        let finalData = { ...formData, variants: cleanVariants };
+        if (imageFile) {
+            try {
+                const imageUrl = await uploadImage(imageFile, `products/${Date.now()}_${imageFile.name}`);
+                finalData.images = [imageUrl, ...finalData.images.filter(img => img !== imageUrl)];
+            } catch (error: any) {
+                console.error("Image upload failed", error);
+                alert(`فشل رفع الصورة: ${error.message || "يرجى المحاولة مرة أخرى."}`);
+                setIsUploading(false);
+                return;
+            }
+        }
+        try {
+            await onSave(existingProduct ? { ...finalData, id: existingProduct.id } : finalData);
+        } catch (error) {
+            console.error("Failed to save product:", error);
+            alert("فشل حفظ المنتج.");
+        } finally {
+            setIsUploading(false);
+        }
+    };
+
+    if (showSecurityCheck) {
+        return (
+            <AdminPasswordModal 
+                isOpen={isOpen} 
+                onClose={() => setShowSecurityCheck(false)} 
+                onSuccess={handleSecuritySuccess}
+                actionDescription="تعديل أسعار المنتج"
+            />
+        );
+    }
+
+    return (
+        <>
+            <Modal isOpen={isOpen} onClose={onClose} title={existingProduct ? 'تعديل بيانات المنتج' : 'إضافة منتج جديد'} onSave={handlePreSubmit} isLoading={isUploading}>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {/* Image Section */}
+                <div className="md:col-span-1 space-y-3">
+                    <label className="block text-sm font-medium">صورة المنتج</label>
+                    <div className="w-full h-40 bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center">
+                        {imagePreview ? 
+                            <img src={imagePreview} alt="Preview" className="h-full w-full object-contain rounded-lg" /> :
+                            <i className="fas fa-image text-4xl text-gray-400"></i>
+                        }
+                    </div>
+                    <div className="flex gap-2">
+                        <input type="file" accept="image/*" onChange={handleImageChange} className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
+                        <button type="button" onClick={() => setShowCamera(true)} className="px-4 py-2 bg-gray-200 dark:bg-gray-600 rounded-full hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors" title="التقاط صورة باستخدام الكاميرا">
+                            <i className="fas fa-camera"></i>
+                        </button>
+                    </div>
+                </div>
+
+                {/* Form Section */}
+                <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="sm:col-span-2">
+                        <label>اسم المنتج *</label>
+                        <input type="text" name="name" value={formData.name} onChange={handleChange} required className="mt-1 w-full input-base" />
+                    </div>
+                    <div>
+                        <label className="flex items-center justify-between">
+                            <span>الكود (SKU) *</span>
+                            {['admin', 'manager', 'accountant'].includes(currentUser?.role || '') && (
+                                <div className="flex gap-2">
+                                    <button type="button" onClick={async () => {
+                                        const randomSku = 'BTA-' + Date.now().toString().slice(-6) + Math.random().toString(36).slice(-3).toUpperCase();
+                                        setFormData(prev => ({ ...prev, sku: randomSku }));
+                                        if (existingProduct?.id) {
+                                            try {
+                                                await updateProduct(existingProduct.id, { sku: randomSku });
+                                            } catch (err) {
+                                                console.error("Failed to auto-save SKU", err);
+                                            }
+                                        }
+                                    }} className="text-sm text-primary hover:text-primary-dark">
+                                        <i className="fas fa-magic"></i> توليد
+                                    </button>
+                                    {formData.sku && (
+                                        <button type="button" onClick={() => {
+                                            const printWindow = window.open('', '', 'width=600,height=400');
+                                            if (printWindow) {
+                                                const scanUrl = window.location.origin + window.location.pathname + '#scan/' + formData.sku;
+                                            printWindow.document.write(`
+                                                <html dir="rtl">
+                                                    <head>
+                                                        <title></title>
+                                                        <style id="page-style">
+                                                            @media print {
+                                                                @page { size: 55mm 40mm; margin: 0; }
+                                                                html, body { margin: 0 !important; padding: 0 !important; width: 55mm; height: 40mm; overflow: hidden; }
+                                                                .no-print { display: none !important; }
+                                                            }
+                                                            html, body { 
+                                                                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                                                                margin: 0; padding: 0; 
+                                                                background: white; color: black;
+                                                                display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+                                                            }
+                                                            .controls {
+                                                                padding: 10px; background: #f3f4f6; width: 100%; text-align: center; margin-bottom: 5px;
+                                                            }
+                                                            .controls button {
+                                                                padding: 8px 16px; margin: 0 5px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer;
+                                                            }
+                                                            .instructions { font-size: 12px; color: #dc2626; margin-top: 5px; }
+                                                            
+                                                            /* The outer limits that the browser understands */
+                                                            #paper {
+                                                                position: relative;
+                                                                width: 55mm; height: 40mm;
+                                                                overflow: hidden;
+                                                            }
+
+                                                            /* The actual content that can be rotated inside paper */
+                                                            #canvas {
+                                                                position: absolute;
+                                                                top: 50%; left: 50%;
+                                                                width: 55mm; height: 40mm;
+                                                                transform: translate(-50%, -50%);
+                                                                display: flex; flex-direction: column; align-items: center; justify-content: space-evenly; 
+                                                                padding: 1mm; box-sizing: border-box; overflow: hidden;
+                                                            }
+
+                                                            .header-row { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 3px; font-size: 10px; font-weight: bold; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1; }
+                                                            #qrcode { display: flex; justify-content: center; align-items: center; margin: 0; }
+                                                            #qrcode img { width: 12mm; height: 12mm; }
+                                                            #barcode { max-width: 95%; height: 7mm; margin: 0; }
+                                                        </style>
+                                                        <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.0/dist/JsBarcode.all.min.js"></script>
+                                                        <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+                                                    </head>
+                                                    <body>
+                                                        <div class="controls no-print">
+                                                            <button onclick="window.print()">🖨️ طباعة</button>
+                                                        </div>
+                                                        <div id="paper">
+                                                            <div id="canvas">
+                                                                <div class="header-row">
+                                                                    <span>${formData.name}</span>
+                                                                    <span>-</span>
+                                                                    <span>${formData.sellingPrice} ج.م</span>
+                                                                </div>
+                                                                <div id="qrcode"></div>
+                                                                <svg id="barcode"></svg>
+                                                            </div>
+                                                        </div>
+                                                        <script>
+                                                            new QRCode(document.getElementById("qrcode"), {
+                                                                text: "${scanUrl}",
+                                                                width: 160,
+                                                                height: 160,
+                                                                colorDark : "#000000",
+                                                                colorLight : "#ffffff",
+                                                                correctLevel : QRCode.CorrectLevel.L
+                                                            });
+                                                            
+                                                            JsBarcode("#barcode", "${formData.sku}", {
+                                                                format: "CODE128",
+                                                                width: 1.5,
+                                                                height: 25,
+                                                                displayValue: true,
+                                                                fontSize: 11,
+                                                                textMargin: 1,
+                                                                margin: 0
+                                                            });
+                                                        </script>
+                                                    </body>
+                                                </html>
+                                            `);
+                                            printWindow.document.close();
+                                        }
+                                    }} className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1">
+                                        <i className="fas fa-print"></i>
+                                        طباعة
+                                    </button>
+                                )}
+                            </div>
+                            )}
+                        </label>
+                        <div className="mt-1 flex gap-2">
+                            <input type="text" name="sku" value={formData.sku} onChange={handleChange} required className="w-full input-base" />
+                            <button type="button" onClick={() => setShowScanner(true)} className="btn-secondary whitespace-nowrap p-2" title="مسح باركود">
+                                <i className="fas fa-barcode"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label>الفئة الرئيسية *</label>
+                        <select 
+                            name="mainCategory" 
+                            value={formData.mainCategory} 
+                            onChange={handleChange} 
+                            required 
+                            className="mt-1 w-full input-base"
+                        >
+                            {(formData.mainCategory && !mainCategories.includes(formData.mainCategory)
+                                ? [formData.mainCategory, ...mainCategories]
+                                : mainCategories
+                            ).map(cat => (
+                                <option key={cat} value={cat}>{cat}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div>
+                        <label>الفئة الفرعية</label>
+                        <CreatableSelect
+                            isClearable
+                            options={Array.from(new Set([
+                                ...(subCategoriesMap[formData.mainCategory] || []),
+                                ...products
+                                    .filter(p => p.mainCategory === formData.mainCategory)
+                                    .map(p => p.subCategory || p.category)
+                                    .filter(Boolean) as string[],
+                            ])).map(sub => ({ value: sub, label: sub }))}
+                            value={formData.category ? { value: formData.category, label: formData.category } : null}
+                            onChange={(newVal: any) =>
+                                setFormData(prev => ({
+                                    ...prev,
+                                    category: newVal ? newVal.value : '',
+                                    subCategory: newVal ? newVal.value : '',
+                                }))
+                            }
+                            placeholder="اختر أو اكتب فئة فرعية..."
+                            formatCreateLabel={(val) => `إضافة "${val}"`}
+                            className="mt-1 react-select-container"
+                            classNamePrefix="react-select"
+                        />
+                    </div>
+                    <div>
+                        <label>الماركة *</label>
+                        <CreatableSelect
+                            isClearable
+                            onChange={handleBrandChange}
+                            options={existingBrands}
+                            value={formData.brand ? { label: formData.brand, value: formData.brand } : null}
+                            placeholder="اختر أو اكتب ماركة جديدة..."
+                            className="mt-1 text-right"
+                            styles={{
+                                control: (base) => ({
+                                    ...base,
+                                    borderColor: '#e5e7eb',
+                                    borderRadius: '0.5rem',
+                                    padding: '2px',
+                                    ':hover': { borderColor: '#3b82f6' }
+                                }),
+                                menu: (base) => ({ ...base, zIndex: 9999 })
+                            }}
+                        />
+                    </div>
+                    <div>
+                        <label>بلد المنشأ</label>
+                        <input type="text" name="countryOfOrigin" value={formData.countryOfOrigin} onChange={handleChange} className="mt-1 w-full input-base" />
+                    </div>
+                    <div>
+                        <label>سعر الشراء {currentUser?.role !== 'admin' && '*'}</label>
+                        <input type="number" name="purchasePrice" value={formData.purchasePrice === 0 ? '' : formData.purchasePrice} onChange={handleChange} required={currentUser?.role !== 'admin'} min="0" step="0.01" className="mt-1 w-full input-base" />
+                    </div>
+                    <div className="sm:col-span-2">
+                        <label className="block mb-1">سعر البيع (قطاعي) {currentUser?.role !== 'admin' && '*'}</label>
+                        <div className="flex gap-2 items-center">
+                            <input type="number" name="sellingPrice" value={formData.sellingPrice === 0 ? '' : formData.sellingPrice} onChange={handleChange} required={currentUser?.role !== 'admin'} min="0" step="0.01" className="flex-grow input-base" />
+                            <div className="flex gap-1">
+                                <button type="button" onClick={() => calculatePrice(25)} className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">25%</button>
+                                <button type="button" onClick={() => calculatePrice(30)} className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">30%</button>
+                                <button type="button" onClick={() => calculatePrice(35)} className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">35%</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <label>سعر البيع (جملة)</label>
+                        <div className="flex gap-2 items-center">
+                            <input type="number" name="wholesalePrice" value={formData.wholesalePrice === 0 ? '' : formData.wholesalePrice} onChange={handleChange} min="0" step="0.01" className="flex-grow input-base" />
+                            <div className="flex gap-1">
+                                <button type="button" onClick={() => calculatePrice(10, 'wholesalePrice')} className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200">10%</button>
+                                <button type="button" onClick={() => calculatePrice(15, 'wholesalePrice')} className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200">15%</button>
+                                <button type="button" onClick={() => calculatePrice(20, 'wholesalePrice')} className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200">20%</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <label>حد الطلب</label>
+                        <input type="number" name="reorderPoint" value={formData.reorderPoint === 0 ? '' : formData.reorderPoint} onChange={handleChange} required min="0" className="mt-1 w-full input-base" />
+                    </div>
+                    <div className="sm:col-span-2 flex items-center mt-4">
+                        <input
+                            type="checkbox"
+                            id="hasSerialNumber"
+                            name="hasSerialNumber"
+                            checked={formData.hasSerialNumber || false}
+                            onChange={(e) => setFormData(prev => ({ ...prev, hasSerialNumber: e.target.checked }))}
+                            className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
+                        />
+                        <label htmlFor="hasSerialNumber" className="mr-2 text-sm font-medium text-gray-900 dark:text-gray-300">
+                            يتطلب رقم تسلسلي (للبطاريات والإطارات)
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div className="mt-4">
+                <h4 className="font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {activeBranches.length <= 1 ? 'الرصيد المتاح بالمخزن' : 'الكميات بالمخازن'}
+                </h4>
+                <div className={`grid gap-3 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg ${activeBranches.length === 1 ? 'grid-cols-1 sm:grid-cols-2' : activeBranches.length === 2 ? 'grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
+                    {activeBranches.map(b => {
+                        const val = formData.stock?.[b.key] ?? 0;
+                        return (
+                            <div key={b.key}>
+                                <label>{b.label}</label>
+                                <input
+                                    type="number"
+                                    name={b.key}
+                                    value={val === 0 ? '' : val}
+                                    onChange={handleStockChange}
+                                    min="0"
+                                    className="mt-1 w-full input-base"
+                                />
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+
+            {/* Optional Product Variants (Size / Color / Edition) */}
+            <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-900/60 rounded-xl border border-gray-200 dark:border-gray-700 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                        <h4 className="font-bold text-sm text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                            <i className="fas fa-layer-group text-primary"></i>
+                            خيارات ومتغيرات المنتج (اختياري — مقاس / لون / سعة)
+                        </h4>
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                            مناسب لمتاجر الملابس والأحذية والعطور والإلكترونيات — اتركه فارغاً للمنتجات القياسية.
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() =>
+                            setFormData(prev => ({
+                                ...prev,
+                                variants: [...(prev.variants || []), { name: '', options: [] }],
+                            }))
+                        }
+                        className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-bold hover:bg-primary-dark"
+                    >
+                        + متغير مخصص
+                    </button>
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                    <button
+                        type="button"
+                        onClick={() =>
+                            setFormData(prev => {
+                                const cur = prev.variants || [];
+                                if (cur.some(v => v.name === 'المقاس')) return prev;
+                                return { ...prev, variants: [...cur, { name: 'المقاس', options: ['S', 'M', 'L', 'XL', 'XXL'] }] };
+                            })
+                        }
+                        className="px-2.5 py-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md text-[11px] font-bold hover:border-primary"
+                    >
+                        + مقاسات ملابس (S-XXL)
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() =>
+                            setFormData(prev => {
+                                const cur = prev.variants || [];
+                                if (cur.some(v => v.name === 'المقاس')) return prev;
+                                return { ...prev, variants: [...cur, { name: 'المقاس', options: ['40', '41', '42', '43', '44', '45'] }] };
+                            })
+                        }
+                        className="px-2.5 py-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md text-[11px] font-bold hover:border-primary"
+                    >
+                        + مقاسات أحذية (40-45)
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() =>
+                            setFormData(prev => {
+                                const cur = prev.variants || [];
+                                if (cur.some(v => v.name === 'اللون')) return prev;
+                                return { ...prev, variants: [...cur, { name: 'اللون', options: ['أسود', 'أبيض', 'كحلي', 'رمادي'] }] };
+                            })
+                        }
+                        className="px-2.5 py-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md text-[11px] font-bold hover:border-primary"
+                    >
+                        + ألوان شائعة
+                    </button>
+                </div>
+
+                {(formData.variants || []).map((variant, vIdx) => (
+                    <div key={vIdx} className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 space-y-2">
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="text"
+                                value={variant.name}
+                                onChange={(e) =>
+                                    setFormData(prev => ({
+                                        ...prev,
+                                        variants: (prev.variants || []).map((v, i) =>
+                                            i === vIdx ? { ...v, name: e.target.value } : v
+                                        ),
+                                    }))
+                                }
+                                placeholder="اسم المتغير (مثال: المقاس أو اللون)"
+                                className="flex-grow px-2.5 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 text-xs font-bold"
+                            />
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setFormData(prev => ({
+                                        ...prev,
+                                        variants: (prev.variants || []).filter((_, i) => i !== vIdx),
+                                    }))
+                                }
+                                className="px-2 py-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded text-xs"
+                                title="حذف المتغير"
+                            >
+                                <i className="fas fa-trash-alt"></i>
+                            </button>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                            {(variant.options || []).map((opt) => (
+                                <span
+                                    key={opt}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-primary/10 text-primary dark:text-primary-light rounded-md text-xs font-bold"
+                                >
+                                    <span>{opt}</span>
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            setFormData(prev => ({
+                                                ...prev,
+                                                variants: (prev.variants || []).map((v, i) =>
+                                                    i === vIdx
+                                                        ? { ...v, options: (v.options || []).filter(o => o !== opt) }
+                                                        : v
+                                                ),
+                                            }))
+                                        }
+                                        className="text-red-500 hover:text-red-700"
+                                    >
+                                        &times;
+                                    </button>
+                                </span>
+                            ))}
+                        </div>
+                        <div className="flex gap-2">
+                            <input
+                                type="text"
+                                value={variantOptionDrafts[vIdx] || ''}
+                                onChange={(e) => setVariantOptionDrafts(prev => ({ ...prev, [vIdx]: e.target.value }))}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        const raw = (variantOptionDrafts[vIdx] || '').trim();
+                                        if (!raw) return;
+                                        const added = raw.split(/[,،]/).map(s => s.trim()).filter(Boolean);
+                                        setFormData(prev => ({
+                                            ...prev,
+                                            variants: (prev.variants || []).map((v, i) =>
+                                                i === vIdx
+                                                    ? { ...v, options: Array.from(new Set([...(v.options || []), ...added])) }
+                                                    : v
+                                            ),
+                                        }));
+                                        setVariantOptionDrafts(prev => ({ ...prev, [vIdx]: '' }));
+                                    }
+                                }}
+                                placeholder="أضف خيارات (مثال: M, L أو أحمر) واضغط +"
+                                className="flex-grow px-2.5 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 text-xs"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const raw = (variantOptionDrafts[vIdx] || '').trim();
+                                    if (!raw) return;
+                                    const added = raw.split(/[,،]/).map(s => s.trim()).filter(Boolean);
+                                    setFormData(prev => ({
+                                        ...prev,
+                                        variants: (prev.variants || []).map((v, i) =>
+                                            i === vIdx
+                                                ? { ...v, options: Array.from(new Set([...(v.options || []), ...added])) }
+                                                : v
+                                        ),
+                                    }));
+                                    setVariantOptionDrafts(prev => ({ ...prev, [vIdx]: '' }));
+                                }}
+                                className="px-3 py-1 bg-gray-800 dark:bg-gray-600 text-white rounded-md text-xs font-bold"
+                            >
+                                + إضافة
+                            </button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            <div className="mt-4">
+                <div className="flex justify-between items-center">
+                    <label>الوصف</label>
+                    <button type="button" onClick={generateDescription} disabled={isGenerating} className="text-sm px-3 py-1 bg-blue-100 text-blue-800 rounded-full hover:bg-blue-200 disabled:opacity-50 flex items-center gap-2">
+                        {isGenerating ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-magic"></i>}
+                        {isGenerating ? 'جاري الإنشاء...' : 'إنشاء بالذكاء الاصطناعي'}
+                    </button>
+                </div>
+                <textarea name="description" value={formData.description || ''} onChange={handleChange} rows={3} className="mt-1 block w-full input-base"></textarea>
+            </div>
+            {isUploading && <p className="text-center mt-2 text-blue-500">جاري رفع الصورة...</p>}
+        </Modal>
+        <BarcodeScannerModal 
+                isOpen={showScanner} 
+                onClose={() => setShowScanner(false)} 
+                onScan={(code) => {
+                    setFormData(prev => ({ ...prev, sku: code }));
+                    setShowScanner(false);
+                }} 
+            />
+        <CameraCaptureModal 
+                isOpen={showCamera} 
+                onClose={() => setShowCamera(false)} 
+                onCapture={handleCameraCapture} 
+        />
+        </>
+    );
+};
+
+export default ProductModal;

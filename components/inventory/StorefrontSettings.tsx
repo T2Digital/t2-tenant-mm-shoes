@@ -1,0 +1,331 @@
+import React, { useState, useEffect } from 'react';
+import { Product, StorefrontSettings as SettingsType } from '../../types';
+import Modal from '../shared/Modal';
+import useStore from '../../lib/store';
+
+interface StorefrontSettingsProps {
+    isOpen: boolean;
+    onClose: () => void;
+    settings: SettingsType;
+    onSave: (newSettings: SettingsType) => void;
+    products: Product[]; // We can keep this for initial products, but we'll fetch more if needed
+}
+
+const StorefrontSettings: React.FC<StorefrontSettingsProps> = ({ isOpen, onClose, settings, onSave, products: initialProducts }) => {
+    const { fetchProductsByIds, searchProducts, globalProducts } = useStore(state => ({
+        fetchProductsByIds: state.fetchProductsByIds,
+        searchProducts: state.searchProducts,
+        globalProducts: state.appData?.products || []
+    }));
+
+    const [featured, setFeatured] = useState<number[]>([]);
+    const [newArrivals, setNewArrivals] = useState<number[]>([]);
+    const [adminPassword, setAdminPassword] = useState('');
+    const [contactPhone, setContactPhone] = useState('');
+    const [address, setAddress] = useState('');
+    const [primaryColor, setPrimaryColor] = useState('#0284c7');
+    const [metaPixelId, setMetaPixelId] = useState('');
+    const [tiktokPixelId, setTiktokPixelId] = useState('');
+    const [googleTagId, setGoogleTagId] = useState('');
+    const [snapPixelId, setSnapPixelId] = useState('');
+    const [isSaving, setIsSaving] = useState(false);
+    
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState<Product[]>([]);
+    const [isSearching, setIsSearching] = useState(false);
+    const [selectedProductsData, setSelectedProductsData] = useState<Product[]>([]);
+
+    useEffect(() => {
+        if (settings) {
+            setFeatured(settings.featuredProductIds || []);
+            setNewArrivals(settings.newArrivalProductIds || []);
+            setAdminPassword(settings.adminPassword || '');
+            setContactPhone((settings as any).contactPhone || (window as any).__TENANT_BRAND__?.phone || '01013373634');
+            setAddress((settings as any).address || (window as any).__TENANT_BRAND__?.address || 'القاهرة - التوفيقية');
+            const rawColor = (settings as any).primaryColor || (window as any).__TENANT_BRAND__?.primaryColor || '#0284c7';
+            setPrimaryColor(String(rawColor).toLowerCase() === '#00f0ff' ? '#0284c7' : rawColor);
+            setMetaPixelId((settings as any).metaPixelId || '');
+            setTiktokPixelId((settings as any).tiktokPixelId || '');
+            setGoogleTagId((settings as any).googleTagId || '');
+            setSnapPixelId((settings as any).snapPixelId || '');
+        }
+    }, [settings, isOpen]);
+
+    // Fetch data for already selected products that might not be in the initial products list
+    useEffect(() => {
+        const loadSelectedProducts = async () => {
+            const allSelectedIds = [...new Set([...featured, ...newArrivals])];
+            const missingIds = allSelectedIds.filter(id => !globalProducts.some(p => p.id === id));
+            
+            if (missingIds.length > 0) {
+                await fetchProductsByIds(missingIds);
+            }
+        };
+        
+        if (isOpen && (featured.length > 0 || newArrivals.length > 0)) {
+            loadSelectedProducts();
+        }
+    }, [isOpen, featured, newArrivals, fetchProductsByIds, globalProducts]);
+
+    useEffect(() => {
+        // Combine initial products, search results, and global products to ensure we have data for selected items
+        const allAvailableProducts = [...globalProducts, ...searchResults];
+        const uniqueProducts = Array.from(new Map(allAvailableProducts.map(item => [item.id, item])).values());
+        setSelectedProductsData(uniqueProducts);
+    }, [globalProducts, searchResults]);
+
+    const handleSearch = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!searchQuery.trim()) {
+            setSearchResults([]);
+            return;
+        }
+        setIsSearching(true);
+        try {
+            const results = await searchProducts(searchQuery);
+            setSearchResults(results);
+        } catch (error) {
+            console.error("Search failed:", error);
+        } finally {
+            setIsSearching(false);
+        }
+    };
+
+    const handleToggle = (list: 'featured' | 'newArrivals', productId: number) => {
+        const setter = list === 'featured' ? setFeatured : setNewArrivals;
+        setter(prev => prev.includes(productId) ? prev.filter(id => id !== productId) : [...prev, productId]);
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setIsSaving(true);
+        try {
+            await onSave({
+                ...(settings || {}),
+                featuredProductIds: featured,
+                newArrivalProductIds: newArrivals,
+                adminPassword,
+                contactPhone,
+                address,
+                primaryColor,
+                metaPixelId: metaPixelId.trim(),
+                tiktokPixelId: tiktokPixelId.trim(),
+                googleTagId: googleTagId.trim(),
+                snapPixelId: snapPixelId.trim(),
+            } as any);
+            onClose();
+        } catch (error) {
+            console.error("Failed to save storefront settings:", error);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const ProductList: React.FC<{ title: string; selectedIds: number[]; onToggle: (id: number) => void }> = ({ title, selectedIds, onToggle }) => {
+        // Show selected products first, then search results or initial products
+        const displayProducts = selectedProductsData.filter(p => 
+            selectedIds.includes(p.id) || 
+            (searchQuery ? searchResults.some(sr => sr.id === p.id) : initialProducts.some(ip => ip.id === p.id))
+        );
+
+        // Sort so selected items are at the top
+        displayProducts.sort((a, b) => {
+            const aSelected = selectedIds.includes(a.id);
+            const bSelected = selectedIds.includes(b.id);
+            if (aSelected && !bSelected) return -1;
+            if (!aSelected && bSelected) return 1;
+            return 0;
+        });
+
+        return (
+            <div className="flex flex-col h-full">
+                <h3 className="font-bold text-lg mb-2">{title}</h3>
+                <div className="flex-grow h-64 overflow-y-auto border rounded-md p-2 space-y-1 dark:border-gray-600 bg-gray-50 dark:bg-gray-800">
+                    {displayProducts.length === 0 ? (
+                        <p className="text-sm text-gray-500 text-center py-4">لا توجد منتجات لعرضها. ابحث لإضافة منتجات.</p>
+                    ) : (
+                        displayProducts.map(p => (
+                            <div key={p.id} className={`flex items-center p-2 rounded transition-colors ${selectedIds.includes(p.id) ? 'bg-primary/10 border border-primary/20' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}`}>
+                                <input
+                                    type="checkbox"
+                                    id={`${title}-${p.id}`}
+                                    checked={selectedIds.includes(p.id)}
+                                    onChange={() => onToggle(p.id)}
+                                    className="ml-3 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                />
+                                <label htmlFor={`${title}-${p.id}`} className="text-sm cursor-pointer flex-grow font-medium">{p.name}</label>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+        );
+    };
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="إعدادات واجهة المتجر" onSave={handleSubmit} isLoading={isSaving}>
+            <div className="space-y-6">
+                
+                {/* Search Bar */}
+                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
+                    <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">البحث عن منتجات لإضافتها</label>
+                    <div className="flex gap-2">
+                        <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    handleSearch(e as any);
+                                }
+                            }}
+                            placeholder="ابحث باسم المنتج..."
+                            className="flex-grow rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring focus:ring-primary focus:ring-opacity-50 dark:bg-gray-700 dark:border-gray-600"
+                        />
+                        <button 
+                            type="button" 
+                            onClick={handleSearch as any}
+                            disabled={isSearching}
+                            className="px-4 py-2 bg-primary text-white rounded-md hover:bg-primary-dark transition disabled:opacity-50 flex items-center gap-2"
+                        >
+                            {isSearching ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-search"></i>}
+                            بحث
+                        </button>
+                        {searchResults.length > 0 && (
+                            <button 
+                                type="button"
+                                onClick={() => { setSearchQuery(''); setSearchResults([]); }}
+                                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition"
+                            >
+                                مسح
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <ProductList title="المنتجات المميزة (الأكثر مبيعاً)" selectedIds={featured} onToggle={(id) => handleToggle('featured', id)} />
+                    <ProductList title="المنتجات الجديدة (وصل حديثاً)" selectedIds={newArrivals} onToggle={(id) => handleToggle('newArrivals', id)} />
+                </div>
+                
+                <div className="border-t pt-4 space-y-4">
+                    <h3 className="font-bold text-lg text-primary">بيانات الفوتر والفاتورة ولون الثيم</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">رقم الموبايل (يظهر في الفوتر والفاتورة)</label>
+                            <input
+                                type="text"
+                                dir="ltr"
+                                value={contactPhone}
+                                onChange={(e) => setContactPhone(e.target.value)}
+                                placeholder="01013373634"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring focus:ring-primary focus:ring-opacity-50 dark:bg-gray-700 dark:border-gray-600"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">العنوان (يظهر في الفوتر والفاتورة)</label>
+                            <input
+                                type="text"
+                                value={address}
+                                onChange={(e) => setAddress(e.target.value)}
+                                placeholder="القاهرة - التوفيقية"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring focus:ring-primary focus:ring-opacity-50 dark:bg-gray-700 dark:border-gray-600"
+                            />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">لون الثيم الرئيسي (اختر لوناً واضحاً للأزرار والنصوص)</label>
+                        <div className="flex flex-wrap items-center gap-2">
+                            {['#0284c7', '#2563eb', '#059669', '#dc2626', '#7c3aed', '#d97706'].map((preset) => (
+                                <button
+                                    key={preset}
+                                    type="button"
+                                    onClick={() => setPrimaryColor(preset)}
+                                    style={{ backgroundColor: preset }}
+                                    className={`w-8 h-8 rounded-full border-2 transition ${primaryColor === preset ? 'border-gray-900 dark:border-white scale-110 shadow-md' : 'border-transparent'}`}
+                                    title={preset}
+                                />
+                            ))}
+                            <input
+                                type="color"
+                                value={primaryColor}
+                                onChange={(e) => setPrimaryColor(e.target.value)}
+                                className="w-10 h-8 rounded cursor-pointer border border-gray-300"
+                            />
+                            <span className="text-xs font-mono text-gray-500" dir="ltr">{primaryColor}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="border-t pt-4">
+                    <h3 className="font-bold text-lg mb-2 text-blue-600 dark:text-blue-400">تتبع الإعلانات والبكسلات (Tracking Pixels)</h3>
+                    <p className="text-xs text-gray-500 mb-3">أضف معرفات البكسل لتتبع المشاهدات، السلة، وإتمام الطلب تلقائياً في حملاتك الإعلانية.</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Meta Pixel ID (فيسبوك وإنستجرام)</label>
+                            <input
+                                type="text"
+                                dir="ltr"
+                                value={metaPixelId}
+                                onChange={(e) => setMetaPixelId(e.target.value)}
+                                placeholder="مثال: 123456789012345"
+                                className="block w-full rounded-md border-gray-300 shadow-sm text-sm dark:bg-gray-700 dark:border-gray-600"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">TikTok Pixel ID</label>
+                            <input
+                                type="text"
+                                dir="ltr"
+                                value={tiktokPixelId}
+                                onChange={(e) => setTiktokPixelId(e.target.value)}
+                                placeholder="مثال: CXXXXXXXXXXXX"
+                                className="block w-full rounded-md border-gray-300 shadow-sm text-sm dark:bg-gray-700 dark:border-gray-600"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Google Tag / Ads ID (GA4 / GTM)</label>
+                            <input
+                                type="text"
+                                dir="ltr"
+                                value={googleTagId}
+                                onChange={(e) => setGoogleTagId(e.target.value)}
+                                placeholder="مثال: G-XXXXXXXXXX"
+                                className="block w-full rounded-md border-gray-300 shadow-sm text-sm dark:bg-gray-700 dark:border-gray-600"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Snapchat Pixel ID</label>
+                            <input
+                                type="text"
+                                dir="ltr"
+                                value={snapPixelId}
+                                onChange={(e) => setSnapPixelId(e.target.value)}
+                                placeholder="مثال: xxxxxxxx-xxxx-xxxx"
+                                className="block w-full rounded-md border-gray-300 shadow-sm text-sm dark:bg-gray-700 dark:border-gray-600"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="border-t pt-4">
+                    <h3 className="font-bold text-lg mb-2 text-red-600">إعدادات الأمان</h3>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">كلمة مرور العمليات الحساسة (للمدير)</label>
+                        <input
+                            type="password"
+                            value={adminPassword}
+                            onChange={(e) => setAdminPassword(e.target.value)}
+                            placeholder="اتركه فارغاً لتعطيل الخاصية"
+                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring focus:ring-primary focus:ring-opacity-50 dark:bg-gray-700 dark:border-gray-600"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">تستخدم لتأكيد الحذف والتعديل والإضافة في الأقسام الحساسة.</p>
+                    </div>
+                </div>
+            </div>
+        </Modal>
+    );
+};
+
+export default StorefrontSettings;

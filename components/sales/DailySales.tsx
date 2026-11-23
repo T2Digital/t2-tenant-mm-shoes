@@ -1,0 +1,869 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { DailySale, User } from '../../types';
+import SectionHeader from '../shared/SectionHeader';
+import DailySaleModal from './DailySaleModal';
+import ConfirmationModal from '../shared/ConfirmationModal';
+import Modal from '../shared/Modal';
+import { formatCurrency, normalizeSaleItems, formatDateTime } from '../../lib/utils';
+import { generateInvoiceContent, triggerInvoicePrint } from '../../lib/reportTemplates';
+import useStore from '../../lib/store';
+import { getActiveBranches, getBranchLabel } from '../../lib/appConfig';
+
+import ProductName from '../shared/ProductName';
+
+const DailySales: React.FC<{ currentUser: User }> = ({ currentUser }) => {
+    const { 
+        dailySales, 
+        products, 
+        addDailySale, 
+        updateDailySale, 
+        deleteDailySale,
+        addTreasuryTransaction, 
+        setProducts,
+        updateProduct,
+        updateProductStock,
+        addExpense,
+        fetchDataByDateRange,
+        pendingScan,
+        setPendingScan,
+        dailyReviews,
+        setDailyReviews,
+        appCustomization
+    } = useStore(state => ({
+        dailySales: state.appData?.dailySales || [],
+        products: state.appData?.products || [],
+        addDailySale: state.addDailySale,
+        updateDailySale: state.updateDailySale,
+        deleteDailySale: state.deleteDailySale,
+        addTreasuryTransaction: state.addTreasuryTransaction,
+        setProducts: state.setProducts,
+        updateProduct: state.updateProduct,
+        updateProductStock: state.updateProductStock,
+        addExpense: state.addExpense,
+        fetchDataByDateRange: state.fetchDataByDateRange,
+        pendingScan: state.pendingScan,
+        setPendingScan: state.setPendingScan,
+        dailyReviews: state.appData?.dailyReview || [],
+        setDailyReviews: state.setDailyReviews,
+        appCustomization: state.appData?.appCustomization
+    }));
+
+    const activeBranches = useMemo(() => getActiveBranches(appCustomization), [appCustomization]);
+    
+    const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
+    const [filterPeriod, setFilterPeriod] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('daily');
+    const [filterSeller, setFilterSeller] = useState<string>('all');
+    const [filterBranch, setFilterBranch] = useState<string>(
+        currentUser?.role === 'admin' ? 'all' : (currentUser?.branch || 'all')
+    );
+    const [filterSource, setFilterSource] = useState<'all' | 'المحل' | 'أونلاين'>('all');
+    const [searchInvoice, setSearchInvoice] = useState('');
+    
+    const [isModalOpen, setModalOpen] = useState(false);
+    const [editingSale, setEditingSale] = useState<DailySale | null>(null);
+    const [scannedSku, setScannedSku] = useState<string | null>(null);
+    const [saleToDelete, setSaleToDelete] = useState<DailySale | null>(null);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+    // Daily closing states & hook
+    const [isCloseDayModalOpen, setCloseDayModalOpen] = useState(false);
+    const [closeDayFormData, setCloseDayFormData] = useState({
+        salesCash: 0,
+        salesElectronic: 0,
+        salesParts: 0,
+        salesAccessories: 0,
+        drawerBalance: 0,
+        notes: ''
+    });
+
+    const computedClosingSums = useMemo(() => {
+        const activeBranch = filterBranch === 'all' ? (currentUser.branch || 'main') : filterBranch;
+        const targetDateSales = dailySales.filter(sale => 
+            sale.date === filterDate && 
+            sale.branchSoldFrom === activeBranch
+        );
+
+        let cashSum = 0;
+        let electronicSum = 0;
+        let partsSum = 0;
+        let accessoriesSum = 0;
+
+        targetDateSales.forEach(sale => {
+            const isSale = sale.direction === 'بيع' || sale.direction === 'تبديل';
+            const isReturn = sale.direction === 'مرتجع';
+
+            const cashAmt = sale.cashAmount || 0;
+            const elecAmt = sale.electronicAmount || 0;
+
+            if (isSale) {
+                cashSum += cashAmt;
+                electronicSum += elecAmt;
+            } else if (isReturn) {
+                cashSum -= cashAmt;
+                electronicSum -= elecAmt;
+            }
+
+            const items = normalizeSaleItems(sale);
+            items.forEach(item => {
+                const prod = products.find(p => p.id === item.productId);
+                const itemTotal = item.quantity * item.unitPrice;
+                if (prod) {
+                    if (prod.category?.includes('غيار') || prod.category === 'parts') {
+                        if (isSale) partsSum += itemTotal;
+                        else if (isReturn) partsSum -= itemTotal;
+                    } else if (prod.category?.includes('كماليات') || prod.category?.includes('إكسسوار') || prod.category === 'accessories') {
+                        if (isSale) accessoriesSum += itemTotal;
+                        else if (isReturn) accessoriesSum -= itemTotal;
+                    }
+                }
+            });
+        });
+
+        return {
+            salesCash: Math.max(0, cashSum),
+            salesElectronic: Math.max(0, electronicSum),
+            salesParts: Math.max(0, partsSum),
+            salesAccessories: Math.max(0, accessoriesSum),
+            drawerBalance: Math.max(0, cashSum),
+        };
+    }, [dailySales, filterDate, filterBranch, products, currentUser]);
+
+    const handleOpenCloseDayModal = () => {
+        setCloseDayFormData({
+            salesCash: computedClosingSums.salesCash,
+            salesElectronic: computedClosingSums.salesElectronic,
+            salesParts: computedClosingSums.salesParts,
+            salesAccessories: computedClosingSums.salesAccessories,
+            drawerBalance: computedClosingSums.drawerBalance,
+            notes: ''
+        });
+        setCloseDayModalOpen(true);
+    };
+
+    const handleSaveCloseDay = async (e: React.FormEvent) => {
+        e.preventDefault();
+        try {
+            const activeBranch = filterBranch === 'all' ? (currentUser.branch || 'main') : filterBranch;
+            const existingReview = dailyReviews.find(r => r.date === filterDate && r.branch === activeBranch);
+
+            const totalSales = closeDayFormData.salesCash + closeDayFormData.salesElectronic;
+            const reviewData = {
+                date: filterDate,
+                branch: activeBranch,
+                salesCash: closeDayFormData.salesCash,
+                salesElectronic: closeDayFormData.salesElectronic,
+                salesParts: closeDayFormData.salesParts,
+                salesAccessories: closeDayFormData.salesAccessories,
+                drawerBalance: closeDayFormData.drawerBalance,
+                notes: closeDayFormData.notes,
+                totalSales
+            };
+
+            let updatedReviews;
+            if (existingReview) {
+                updatedReviews = dailyReviews.map(r => r.id === existingReview.id ? { ...r, ...reviewData } as any : r);
+            } else {
+                const newId = Math.max(0, ...dailyReviews.map(r => r.id)) + 1;
+                updatedReviews = [...dailyReviews, { id: newId, ...reviewData } as any];
+            }
+
+            await setDailyReviews(updatedReviews);
+            setCloseDayModalOpen(false);
+            alert('تم تقفيل اليومية وحفظ المراجعة بنجاح');
+        } catch (error) {
+            console.error('Error closing day:', error);
+            alert('حدث خطأ أثناء حفظ تقفيل اليومية');
+        }
+    };
+
+    const globalLoading = useStore(state => state.isLoading);
+    useEffect(() => {
+        const handleScan = (sku: string) => {
+            if (isModalOpen) {
+                // If the invoice modal is already open, let the modal's internal scanner listener handle it
+                return;
+            }
+
+            setScannedSku(null); // Clear first to force a state change even if same SKU
+            setTimeout(() => {
+                setScannedSku(sku);
+            }, 10);
+            setEditingSale(null);
+            setModalOpen(true);
+        };
+        const scanEventObj = (e: CustomEvent<string>) => handleScan(e.detail);
+        window.addEventListener('scan-product', scanEventObj as EventListener);
+        
+        if (!globalLoading && pendingScan) {
+            handleScan(pendingScan);
+            setPendingScan(null);
+        }
+
+        return () => window.removeEventListener('scan-product', scanEventObj as EventListener);
+    }, [globalLoading, pendingScan, setPendingScan, isModalOpen]);
+
+    useEffect(() => {
+        const handleOnline = () => setIsOnline(true);
+        const handleOffline = () => setIsOnline(false);
+
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    }, []);
+
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+    const arabicDays = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+
+    const todaySales = useMemo(() => {
+        return dailySales
+            .filter(sale => {
+                let dateMatch = false;
+                const saleDate = new Date(sale.date);
+                const filterD = new Date(filterDate);
+                
+                if (filterPeriod === 'daily') {
+                    dateMatch = sale.date === filterDate;
+                } else if (filterPeriod === 'weekly') {
+                    const startOfWeek = new Date(filterD);
+                    startOfWeek.setDate(filterD.getDate() - filterD.getDay());
+                    const endOfWeek = new Date(startOfWeek);
+                    endOfWeek.setDate(startOfWeek.getDate() + 6);
+                    dateMatch = saleDate >= startOfWeek && saleDate <= endOfWeek;
+                } else if (filterPeriod === 'monthly') {
+                    dateMatch = saleDate.getMonth() === filterD.getMonth() && saleDate.getFullYear() === filterD.getFullYear();
+                } else if (filterPeriod === 'yearly') {
+                    dateMatch = saleDate.getFullYear() === filterD.getFullYear();
+                }
+
+                const sellerMatch = filterSeller === 'all' || sale.sellerId === filterSeller;
+                const branchMatch = filterBranch === 'all' || sale.branchSoldFrom === filterBranch;
+                const sourceMatch = filterSource === 'all' || sale.source === filterSource;
+                const invoiceMatch = !searchInvoice || sale.invoiceNumber.toLowerCase().includes(searchInvoice.toLowerCase());
+                
+                if (searchInvoice) {
+                    if (currentUser.role === 'seller') {
+                        return sale.sellerId === currentUser.id && invoiceMatch;
+                    }
+                    return invoiceMatch;
+                }
+
+                if (currentUser.role === 'seller') {
+                    return dateMatch && sale.sellerId === currentUser.id && branchMatch && sourceMatch;
+                }
+                return dateMatch && sellerMatch && branchMatch && sourceMatch;
+            })
+            .sort((a,b) => b.id - a.id);
+    }, [dailySales, filterDate, filterPeriod, filterSeller, filterBranch, filterSource, currentUser, searchInvoice]);
+
+    const { totalSales, transactionsCount } = useMemo(() => {
+        const total = todaySales.reduce((sum, sale) => {
+            if (sale.direction === 'بيع' || sale.direction === 'مرتجع' || sale.direction === 'تبديل') {
+                return sum + sale.totalAmount;
+            }
+            return sum;
+        }, 0);
+        return { totalSales: total, transactionsCount: todaySales.length };
+    }, [todaySales]);
+
+    const handleAddSale = () => {
+        setEditingSale(null);
+        setModalOpen(true);
+    };
+    
+    const handleEditSale = (sale: DailySale) => {
+        setEditingSale(sale);
+        setModalOpen(true);
+    };
+
+    const confirmDeleteSale = async () => {
+        if (!saleToDelete) return;
+        setIsDeleting(true);
+        try {
+            await deleteDailySale(saleToDelete.id);
+            setSaleToDelete(null);
+        } catch (error) {
+            console.error("Failed to delete sale:", error);
+            alert(`فشل حذف الفاتورة: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+    
+    const handleSaveSale = async (saleData: Omit<DailySale, 'id'> & { id?: number }, shouldPrint?: boolean) => {
+        const isEditing = saleData.id !== undefined;
+        let finalSaleData: Omit<DailySale, 'id'> = saleData;
+
+        const originalSale = isEditing ? dailySales.find(s => s.id === saleData.id) : undefined;
+
+        const stockChanges = new Map<number, number>();
+        
+        if (isEditing && originalSale) {
+            const originalItems = normalizeSaleItems(originalSale);
+            originalItems.forEach(item => {
+                let quantityToRevert = 0;
+                if (originalSale.direction === 'بيع') {
+                    quantityToRevert = item.quantity;
+                } else if (originalSale.direction === 'مرتجع') {
+                    quantityToRevert = -item.quantity;
+                } else if (originalSale.direction === 'تبديل') {
+                    quantityToRevert = item.isReturn ? -item.quantity : item.quantity;
+                } else {
+                    quantityToRevert = item.quantity; // Default fallback
+                }
+                stockChanges.set(item.productId, (stockChanges.get(item.productId) || 0) + quantityToRevert);
+            });
+        }
+        
+        const finalItems = normalizeSaleItems(finalSaleData as DailySale);
+        finalItems.forEach(item => {
+            let quantityToApply = 0;
+            if (finalSaleData.direction === 'بيع') {
+                quantityToApply = -item.quantity;
+            } else if (finalSaleData.direction === 'مرتجع') {
+                quantityToApply = item.quantity;
+            } else if (finalSaleData.direction === 'تبديل') {
+                quantityToApply = item.isReturn ? item.quantity : -item.quantity;
+            } else {
+                quantityToApply = -item.quantity; // Default fallback
+            }
+            stockChanges.set(item.productId, (stockChanges.get(item.productId) || 0) + quantityToApply);
+        });
+
+        // Update only the products that changed
+        for (const [productId, change] of stockChanges.entries()) {
+            await updateProductStock(productId, finalSaleData.branchSoldFrom, change);
+        }
+
+        let savedSale: DailySale;
+        if (isEditing && saleData.id) {
+            await updateDailySale(saleData.id, saleData);
+            savedSale = { ...saleData, id: saleData.id } as DailySale;
+        } else {
+            const newSale = await addDailySale(finalSaleData);
+            savedSale = newSale;
+            
+            if (newSale.direction === 'هدية') {
+                // Add to expenses without deducting from treasury
+                await addExpense({
+                    date: newSale.date,
+                    name: 'هدية',
+                    amount: newSale.totalAmount, // Or calculate cost price if needed
+                    notes: `هدية من فاتورة #${newSale.invoiceNumber}`,
+                    type: 'عامة'
+                }, true); // true to skip treasury
+            } else {
+                let transactionType: 'إيراد مبيعات' | 'مرتجع مبيعات' = 'إيراد مبيعات';
+                let amountIn = 0;
+                let amountOut = 0;
+
+                const totalPaid = (newSale.cashAmount || 0) + (newSale.electronicAmount || 0);
+
+                if (newSale.direction === 'بيع') {
+                    transactionType = 'إيراد مبيعات';
+                    amountIn = Math.abs(totalPaid);
+                } else if (newSale.direction === 'مرتجع') {
+                    transactionType = 'مرتجع مبيعات';
+                    amountOut = Math.abs(totalPaid);
+                } else if (newSale.direction === 'تبديل') {
+                    if (newSale.totalAmount >= 0) {
+                        transactionType = 'إيراد مبيعات';
+                        amountIn = Math.abs(totalPaid);
+                    } else {
+                        transactionType = 'مرتجع مبيعات';
+                        amountOut = Math.abs(totalPaid);
+                    }
+                }
+
+                if (newSale.paymentMethod === 'مختلط' && newSale.cashAmount && newSale.electronicAmount) {
+                    const cashIn = amountIn > 0 ? Math.abs(newSale.cashAmount) : 0;
+                    const cashOut = amountOut > 0 ? Math.abs(newSale.cashAmount) : 0;
+                    const elecIn = amountIn > 0 ? Math.abs(newSale.electronicAmount) : 0;
+                    const elecOut = amountOut > 0 ? Math.abs(newSale.electronicAmount) : 0;
+
+                    if (cashIn > 0 || cashOut > 0) {
+                        await addTreasuryTransaction({
+                            date: newSale.date, type: transactionType, description: `${newSale.direction} فاتورة #${newSale.invoiceNumber} (نقدي)`,
+                            amountIn: cashIn,
+                            amountOut: cashOut, relatedId: newSale.id, paymentMethod: 'cash'
+                        });
+                    }
+                    if (elecIn > 0 || elecOut > 0) {
+                        await addTreasuryTransaction({
+                            date: newSale.date, type: transactionType, description: `${newSale.direction} فاتورة #${newSale.invoiceNumber} (إلكتروني)`,
+                            amountIn: elecIn,
+                            amountOut: elecOut, relatedId: newSale.id, paymentMethod: 'electronic'
+                        });
+                    }
+                } else if (newSale.paymentMethod !== 'آجل') {
+                    const method = newSale.paymentMethod === 'إلكترونى' ? 'electronic' : 'cash';
+                    if (amountIn > 0 || amountOut > 0) {
+                        await addTreasuryTransaction({
+                            date: newSale.date, type: transactionType, description: `${newSale.direction} فاتورة #${newSale.invoiceNumber}`,
+                            amountIn: amountIn,
+                            amountOut: amountOut, relatedId: newSale.id, paymentMethod: method
+                        });
+                    }
+                }
+            }
+        }
+        
+        setModalOpen(false);
+        if (shouldPrint) {
+            handlePrintInvoice(savedSale);
+        }
+    };
+
+    const handlePrintInvoice = (sale: DailySale, isTaxable = sale.isTaxable || false) => {
+        triggerInvoicePrint(sale, products, isTaxable);
+    };
+
+    const [saleToView, setSaleToView] = useState<DailySale | null>(null);
+
+    useEffect(() => {
+        const checkHashForView = () => {
+            let fullHash = window.location.hash.replace('#', '');
+            const [baseHash, query] = fullHash.split('?');
+            if (baseHash === 'sales' && query && query.startsWith('view=')) {
+                const saleIdStr = query.split('=')[1];
+                const saleId = Number(saleIdStr);
+                const sale = dailySales.find(s => s.id === saleId);
+                if (sale) {
+                    setSaleToView(sale);
+                }
+            }
+        };
+
+        checkHashForView();
+        window.addEventListener('hashchange', checkHashForView);
+        return () => window.removeEventListener('hashchange', checkHashForView);
+    }, [dailySales]);
+
+    const handleViewInvoice = (sale: DailySale) => {
+        setSaleToView(sale);
+    };
+
+    const handlePrintFilteredSales = () => {
+        import('../../lib/reportTemplates').then(({ generateFilteredSalesReportContent }) => {
+            const content = generateFilteredSalesReportContent(todaySales, filterDate, filterPeriod);
+            const reportWindow = window.open('', '_blank');
+            if (reportWindow) {
+                reportWindow.document.write(content);
+                reportWindow.document.close();
+            } else {
+                alert("يرجى السماح بالنوافذ المنبثقة لفتح التقرير.");
+            }
+        });
+    };
+
+    const uniqueSellers = useMemo(() => {
+        const sellers = new Set(dailySales.map(s => s.sellerName).filter(Boolean));
+        return Array.from(sellers);
+    }, [dailySales]);
+
+    return (
+        <div className="animate-fade-in space-y-6">
+            <SectionHeader icon="fa-hand-holding-usd" title="مبيعات اليوم">
+                <div className="flex items-center gap-4">
+                    {!isOnline && (
+                        <div className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-sm font-bold flex items-center gap-2 animate-pulse">
+                            <i className="fas fa-wifi-slash"></i>
+                            وضع عدم الاتصال (سيتم المزامنة لاحقاً)
+                        </div>
+                    )}
+                    <button onClick={handleOpenCloseDayModal} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg flex items-center gap-2 transition shadow-md">
+                        <i className="fas fa-lock text-sm"></i>
+                        تقفيل اليومية
+                    </button>
+                    <button onClick={handlePrintFilteredSales} className="px-4 py-2 bg-secondary text-white rounded-lg flex items-center gap-2 hover:bg-secondary-dark transition shadow-md">
+                        <i className="fas fa-print"></i>
+                        طباعة المبيعات
+                    </button>
+                    <button onClick={handleAddSale} className="px-4 py-2 bg-primary text-white rounded-lg flex items-center gap-2 hover:bg-primary-dark transition shadow-md">
+                        <i className="fas fa-plus"></i>
+                        فاتورة جديدة
+                    </button>
+                </div>
+            </SectionHeader>
+
+            {/* Filters */}
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border dark:border-gray-700 flex flex-wrap gap-4 items-end">
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">فترة العرض</label>
+                    <select 
+                        value={filterPeriod} 
+                        onChange={(e) => setFilterPeriod(e.target.value as any)}
+                        className="p-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 min-w-[120px]"
+                    >
+                        <option value="daily">يومي</option>
+                        <option value="weekly">أسبوعي</option>
+                        <option value="monthly">شهري</option>
+                        <option value="yearly">سنوي</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">التاريخ المرجعي</label>
+                    <div className="flex gap-2">
+                        <input 
+                            type="date" 
+                            value={filterDate} 
+                            onChange={(e) => setFilterDate(e.target.value)} 
+                            className="p-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600"
+                        />
+                        <button 
+                            onClick={() => {
+                                let startDate = filterDate;
+                                let endDate = filterDate;
+                                const filterD = new Date(filterDate);
+                                if (filterPeriod === 'weekly') {
+                                    const startOfWeek = new Date(filterD);
+                                    startOfWeek.setDate(filterD.getDate() - filterD.getDay());
+                                    const endOfWeek = new Date(startOfWeek);
+                                    endOfWeek.setDate(startOfWeek.getDate() + 6);
+                                    startDate = startOfWeek.toISOString().split('T')[0];
+                                    endDate = endOfWeek.toISOString().split('T')[0];
+                                } else if (filterPeriod === 'monthly') {
+                                    const startOfMonth = new Date(filterD.getFullYear(), filterD.getMonth(), 1);
+                                    const endOfMonth = new Date(filterD.getFullYear(), filterD.getMonth() + 1, 0);
+                                    startDate = startOfMonth.toISOString().split('T')[0];
+                                    endDate = endOfMonth.toISOString().split('T')[0];
+                                } else if (filterPeriod === 'yearly') {
+                                    const startOfYear = new Date(filterD.getFullYear(), 0, 1);
+                                    const endOfYear = new Date(filterD.getFullYear(), 11, 31);
+                                    startDate = startOfYear.toISOString().split('T')[0];
+                                    endDate = endOfYear.toISOString().split('T')[0];
+                                }
+                                fetchDataByDateRange('dailySales', startDate, endDate);
+                            }}
+                            className="px-3 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition"
+                            title="جلب بيانات من الخادم"
+                        >
+                            <i className="fas fa-cloud-download-alt"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                {currentUser.role !== 'seller' && (
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">البائع</label>
+                        <select 
+                            value={filterSeller} 
+                            onChange={(e) => setFilterSeller(e.target.value)}
+                            className="p-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 min-w-[150px]"
+                        >
+                            <option value="all">الكل</option>
+                            {uniqueSellers.map(seller => (
+                                <option key={seller} value={dailySales.find(s => s.sellerName === seller)?.sellerId}>{seller}</option>
+                            ))}
+                        </select>
+                    </div>
+                )}
+
+                {activeBranches.length > 1 && (currentUser?.role === 'admin' || (currentUser?.allowedBranches && currentUser.allowedBranches.length > 1)) && (
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">الفرع</label>
+                        <select 
+                            value={filterBranch} 
+                            onChange={(e) => setFilterBranch(e.target.value)}
+                            className="p-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 min-w-[150px]"
+                        >
+                            {currentUser.role === 'admin' ? (
+                                <>
+                                    <option value="all">الكل</option>
+                                    {activeBranches.map(b => (
+                                        <option key={b.key} value={b.key}>{b.label}</option>
+                                    ))}
+                                </>
+                            ) : (
+                                activeBranches
+                                    .filter(b => currentUser.allowedBranches?.includes(b.key))
+                                    .map(b => <option key={b.key} value={b.key}>{b.label}</option>)
+                            )}
+                        </select>
+                    </div>
+                )}
+
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">المصدر</label>
+                    <select 
+                        value={filterSource} 
+                        onChange={(e) => setFilterSource(e.target.value as any)}
+                        className="p-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 min-w-[150px]"
+                    >
+                        <option value="all">الكل</option>
+                        <option value="المحل">المحل</option>
+                        <option value="أونلاين">أونلاين</option>
+                    </select>
+                </div>
+                <div className="flex-grow">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">بحث برقم الفاتورة</label>
+                    <div className="relative">
+                        <input 
+                            type="text" 
+                            value={searchInvoice} 
+                            onChange={(e) => setSearchInvoice(e.target.value)} 
+                            placeholder="بحث برقم الفاتورة..."
+                            className="w-full p-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 pl-10"
+                        />
+                        <i className="fas fa-search absolute left-3 top-3 text-gray-400"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div>
+                    <h3 className="text-xl font-bold text-primary dark:text-primary-light">
+                        📅 {today.toLocaleDateString("ar-EG")} - {arabicDays[today.getDay()]}
+                    </h3>
+                    <p className="text-gray-600 dark:text-gray-300">المستخدم: <strong className="font-semibold">{currentUser.name}</strong></p>
+                </div>
+                <div className="flex gap-4 sm:gap-8">
+                    <div className="text-center">
+                        <span className="block text-2xl font-bold text-gray-800 dark:text-white">{formatCurrency(totalSales)}</span>
+                        <span className="text-sm text-gray-500 dark:text-gray-400">إجمالي المبيعات</span>
+                    </div>
+                     <div className="text-center">
+                        <span className="block text-2xl font-bold text-gray-800 dark:text-white">{transactionsCount}</span>
+                        <span className="text-sm text-gray-500 dark:text-gray-400">عدد الفواتير</span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-x-auto">
+                <table className="w-full text-sm text-right text-gray-500 dark:text-gray-400">
+                    <thead className="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-300">
+                        <tr>
+                            <th scope="col" className="px-6 py-3">رقم الفاتورة</th>
+                            <th scope="col" className="px-6 py-3">التاريخ والوقت</th>
+                            <th scope="col" className="px-6 py-3">عدد الأصناف</th>
+                            <th scope="col" className="px-6 py-3">الإجمالي</th>
+                            <th scope="col" className="px-6 py-3">طريقة الدفع</th>
+                            <th scope="col" className="px-6 py-3">التوجيه</th>
+                            <th scope="col" className="px-6 py-3">البائع</th>
+                            <th scope="col" className="px-6 py-3">الإجراءات</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {todaySales.length === 0 ? (
+                            <tr>
+                                <td colSpan={8} className="text-center py-8 text-gray-500">لا توجد فواتير مسجلة اليوم.</td>
+                            </tr>
+                        ) : (
+                            todaySales.map(sale => {
+                                const items = normalizeSaleItems(sale);
+                                return (
+                                <tr key={sale.id} className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 even:bg-gray-50 dark:even:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700">
+                                    <td className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">{sale.invoiceNumber}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap" dir="ltr">{formatDateTime(sale.date, sale.timestamp)}</td>
+                                    <td className="px-6 py-4">{items.length}</td>
+                                    <td className="px-6 py-4 font-semibold">{formatCurrency(sale.totalAmount)}</td>
+                                    <td className="px-6 py-4">{sale.paymentMethod === 'إلكترونى' ? 'إلكتروني' : sale.paymentMethod === 'آجل' ? 'آجل' : 'نقدي'}</td>
+                                    <td className="px-6 py-4">{sale.direction}</td>
+                                    <td className="px-6 py-4">{sale.sellerName}</td>
+                                    <td className="px-6 py-4 flex gap-3">
+                                        <button onClick={() => handlePrintInvoice(sale)} className="text-green-500 hover:text-green-700 text-lg" aria-label={`طباعة فاتورة ${sale.invoiceNumber}`} title="طباعة الفاتورة"><i className="fas fa-print"></i></button>
+                                        {sale.isTaxable && (
+                                            <button onClick={() => handlePrintInvoice(sale, true)} className="text-purple-600 hover:text-purple-800 text-lg" aria-label={`طباعة فاتورة ضريبية ${sale.invoiceNumber}`} title="طباعة فاتورة ضريبية (14%)"><i className="fas fa-file-invoice-dollar"></i></button>
+                                        )}
+                                        <button onClick={() => handleViewInvoice(sale)} className="text-blue-600 hover:text-blue-800 text-lg" aria-label={`عرض تفاصيل فاتورة ${sale.invoiceNumber}`} title="عرض الفاتورة"><i className="fas fa-eye"></i></button>
+                                        <button onClick={() => handleEditSale(sale)} className="text-blue-500 hover:text-blue-700 text-lg" aria-label={`تعديل فاتورة ${sale.invoiceNumber}`} title="تعديل"><i className="fas fa-edit"></i></button>
+                                        <button onClick={() => setSaleToDelete(sale)} className="text-red-500 hover:text-red-700 text-lg w-6 text-center" aria-label={`حذف فاتورة ${sale.invoiceNumber}`}>
+                                            <i className="fas fa-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                                );
+                            })
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {isModalOpen && (
+                <DailySaleModal
+                    isOpen={isModalOpen}
+                    onClose={() => {
+                        setModalOpen(false);
+                        setScannedSku(null);
+                    }}
+                    onSave={handleSaveSale}
+                    currentUser={currentUser}
+                    existingSale={editingSale}
+                    dailySales={dailySales}
+                    products={products}
+                    initialScannedCode={scannedSku || undefined}
+                />
+            )}
+            {saleToDelete && (
+                <ConfirmationModal
+                    isOpen={!!saleToDelete}
+                    onClose={() => setSaleToDelete(null)}
+                    onConfirm={confirmDeleteSale}
+                    title="تأكيد الحذف"
+                    message={`هل أنت متأكد من حذف الفاتورة رقم "${saleToDelete.invoiceNumber}"؟ سيتم إرجاع الكميات للمخزون وعكس الحركة المالية.`}
+                    isLoading={isDeleting}
+                    requireSecurityCheck={true}
+                />
+            )}
+            {saleToView && (
+                <Modal isOpen={!!saleToView} onClose={() => setSaleToView(null)} title={`تفاصيل الفاتورة #${saleToView.invoiceNumber}`}>
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div><strong>التاريخ:</strong> {formatDateTime(saleToView.date, saleToView.timestamp)}</div>
+                            <div><strong>البائع:</strong> {saleToView.sellerName}</div>
+                            {saleToView.customerName && <div><strong>العميل:</strong> {saleToView.customerName}</div>}
+                            {saleToView.customerPhone && <div><strong>هاتف العميل:</strong> {saleToView.customerPhone}</div>}
+                            <div><strong>التوجيه:</strong> {saleToView.direction}</div>
+                            <div><strong>طريقة الدفع:</strong> {saleToView.paymentMethod || 'نقدى'}</div>
+                        </div>
+                        <div className="border-t pt-4">
+                            <h4 className="font-bold mb-2">الأصناف</h4>
+                            <table className="w-full text-sm text-right">
+                                <thead className="bg-gray-50 dark:bg-gray-700">
+                                    <tr>
+                                        <th className="p-2">الصنف</th>
+                                        <th className="p-2">الكمية</th>
+                                        <th className="p-2">السعر</th>
+                                        <th className="p-2">الإجمالي</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {normalizeSaleItems(saleToView).map((item, idx) => (
+                                        <tr key={idx} className="border-b dark:border-gray-600">
+                                            <td className="p-2">
+                                                <ProductName productId={item.productId} fallbackName={item.productName} />
+                                                {item.serialNumbers && item.serialNumbers.length > 0 && (
+                                                    <div className="text-xs text-gray-500 mt-1">S/N: {item.serialNumbers.join(', ')}</div>
+                                                )}
+                                            </td>
+                                            <td className="p-2">{item.quantity}</td>
+                                            <td className="p-2">{formatCurrency(item.unitPrice)}</td>
+                                            <td className="p-2">{formatCurrency(item.quantity * item.unitPrice)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="border-t pt-4 space-y-2 text-sm">
+                            <div className="flex justify-between font-bold">
+                                <span>الإجمالي:</span>
+                                <span>{formatCurrency(saleToView.totalAmount)}</span>
+                            </div>
+                            {saleToView.discount ? (
+                                <div className="flex justify-between text-red-500">
+                                    <span>خصم ({saleToView.discount}%):</span>
+                                    <span>-{formatCurrency(Math.abs((saleToView.totalAmount / (1 - (saleToView.discount/100))) * (saleToView.discount/100)))}</span>
+                                </div>
+                            ) : null}
+                            {saleToView.cashAmount ? (
+                                <div className="flex justify-between">
+                                    <span>المدفوع نقداً:</span>
+                                    <span>{formatCurrency(saleToView.cashAmount)}</span>
+                                </div>
+                            ) : null}
+                            {saleToView.electronicAmount ? (
+                                <div className="flex justify-between">
+                                    <span>المدفوع إلكترونياً:</span>
+                                    <span>{formatCurrency(saleToView.electronicAmount)}</span>
+                                </div>
+                            ) : null}
+                            {saleToView.remainingDebt ? (
+                                <div className="flex justify-between font-bold text-red-600">
+                                    <span>المتبقي (آجل):</span>
+                                    <span>{formatCurrency(saleToView.remainingDebt)}</span>
+                                </div>
+                            ) : null}
+                        </div>
+                        {saleToView.notes && (
+                            <div className="border-t pt-4 text-sm">
+                                <strong>ملاحظات:</strong> {saleToView.notes}
+                            </div>
+                        )}
+                    </div>
+                </Modal>
+            )}
+
+            {isCloseDayModalOpen && (
+                <Modal 
+                    isOpen={isCloseDayModalOpen} 
+                    onClose={() => setCloseDayModalOpen(false)} 
+                    title={`تقفيل يومية: ${filterDate} - فرع: ${getBranchLabel(filterBranch === 'all' ? (currentUser.branch || activeBranches[0]?.key || 'main') : filterBranch, activeBranches)}`} 
+                    onSave={handleSaveCloseDay}
+                    saveLabel="حفظ التقفيل"
+                >
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="md:col-span-2 p-3 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
+                            <span className="text-sm font-semibold text-purple-800 dark:text-purple-300">
+                                تم احتساب مبيعات اليوم تلقائياً بناءً على فواتير المبيعات المفلترة. يمكنك تعديل القيم قبل الحفظ والمراجعة.
+                            </span>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">المبيعات النقدية *</label>
+                            <input 
+                                type="number" 
+                                required
+                                value={closeDayFormData.salesCash} 
+                                onChange={e => setCloseDayFormData(p => ({ ...p, salesCash: Number(e.target.value) }))}
+                                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm dark:bg-gray-700 text-gray-900 dark:text-white" 
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">المبيعات الإلكترونية *</label>
+                            <input 
+                                type="number" 
+                                required
+                                value={closeDayFormData.salesElectronic} 
+                                onChange={e => setCloseDayFormData(p => ({ ...p, salesElectronic: Number(e.target.value) }))}
+                                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm dark:bg-gray-700 text-gray-900 dark:text-white" 
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">مبيعات قطع غيار</label>
+                            <input 
+                                type="number" 
+                                value={closeDayFormData.salesParts} 
+                                onChange={e => setCloseDayFormData(p => ({ ...p, salesParts: Number(e.target.value) }))}
+                                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm dark:bg-gray-700 text-gray-900 dark:text-white" 
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">كماليات وإكسسوارات</label>
+                            <input 
+                                type="number" 
+                                value={closeDayFormData.salesAccessories} 
+                                onChange={e => setCloseDayFormData(p => ({ ...p, salesAccessories: Number(e.target.value) }))}
+                                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm dark:bg-gray-700 text-gray-900 dark:text-white" 
+                            />
+                        </div>
+                        <div className="md:col-span-2">
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">رصيد الدرج الفعلي في الصندوق *</label>
+                            <input 
+                                type="number" 
+                                required
+                                value={closeDayFormData.drawerBalance} 
+                                onChange={e => setCloseDayFormData(p => ({ ...p, drawerBalance: Number(e.target.value) }))}
+                                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm dark:bg-gray-700 text-gray-900 dark:text-white text-lg font-bold text-green-600" 
+                            />
+                        </div>
+                        <div className="md:col-span-2">
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">ملاحظات التقفيل</label>
+                            <textarea 
+                                value={closeDayFormData.notes} 
+                                onChange={e => setCloseDayFormData(p => ({ ...p, notes: e.target.value }))}
+                                rows={2}
+                                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm dark:bg-gray-700 text-gray-900 dark:text-white" 
+                            />
+                        </div>
+                    </div>
+                </Modal>
+            )}
+        </div>
+    );
+};
+
+export default DailySales;
