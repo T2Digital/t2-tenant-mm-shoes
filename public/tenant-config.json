@@ -1,0 +1,70 @@
+{
+  "id": "mm-shoes",
+  "brandId": "mm-shoes",
+  "slug": "mm-shoes",
+  "name": "M&M للأحذية الحريمي والأطفالي",
+  "slogan": "متجر إلكتروني للأحذية الحريمي والأطفالي",
+  "logoUrl": "",
+  "phone": "01013373634",
+  "whatsapp": "01013373634",
+  "adminEmail": "owner@mm-shoes.t2.app",
+  "adminPin": "373634",
+  "primaryColor": "#db2777",
+  "accentColor": "#0f172a",
+  "commercialRegister": "",
+  "taxCardNumber": "",
+  "enableCash": true,
+  "productsCatalog": [
+    {
+      "name": "سنيكرز حريمي كاجوال نعل طبي مريح",
+      "numericPrice": 790,
+      "category": "أحذية حريمي",
+      "subCategory": "سنيكرز",
+      "brand": "M&M",
+      "description": "خامة جلد طري ونعل طبي مرن للخروجات والمشي اليومي"
+    },
+    {
+      "name": "هيلز كلاسيك سواريه كعب مريح",
+      "numericPrice": 950,
+      "category": "أحذية حريمي",
+      "subCategory": "سواريه وكلاسيك",
+      "brand": "M&M",
+      "description": "تصميم أنيق للمناسبات والعمل بمقاسات 36 إلى 41"
+    },
+    {
+      "name": "باليرينا حريمي طبية للمشي والعمل",
+      "numericPrice": 620,
+      "category": "أحذية حريمي",
+      "subCategory": "باليرينا وفلات",
+      "brand": "M&M",
+      "description": "مبطنة بالكامل لراحة القدم طوال اليوم"
+    },
+    {
+      "name": "كوتشي أطفالى لايت مضيء ومريح",
+      "numericPrice": 540,
+      "category": "أحذية أطفالي",
+      "subCategory": "كوتشي أطفال",
+      "brand": "M&M",
+      "description": "خفيف الوزن بسكوتش سهل الارتداء للأطفال"
+    },
+    {
+      "name": "شوز مدرسي أطفالي جلد طبيعي أسود",
+      "numericPrice": 650,
+      "category": "أحذية أطفالي",
+      "subCategory": "أحذية مدارس",
+      "brand": "M&M",
+      "description": "متين ومقاوم للاحتكاك ومريح للاستخدام المدرسي"
+    },
+    {
+      "name": "صندل أطفالي صيفي طبي بنعل مانع للانزلاق",
+      "numericPrice": 430,
+      "category": "أحذية أطفالي",
+      "subCategory": "صنادل أطفال",
+      "brand": "M&M",
+      "description": "تهوية ممتازة وحماية كاملة لقدم الطفل"
+    }
+  ],
+  "templateId": "battah",
+  "appTemplate": "products_erp",
+  "ezZelApiBase": "https://t2os.app"
+}
