@@ -129,12 +129,15 @@ export function getMainCategories(
   products?: Product[]
 ): string[] {
   const tenantDefault = getTenantDefaultCustomization();
+  const hasProductCats = Boolean(resolveTenantBrandId()) && Array.isArray(products) && products.length > 0;
   const base =
     (Array.isArray(appCustomization?.mainCategories) && appCustomization.mainCategories.length > 0
       ? appCustomization.mainCategories
       : Array.isArray(tenantDefault?.mainCategories) && tenantDefault.mainCategories.length > 0
         ? tenantDefault.mainCategories
-        : MAIN_CATEGORIES) || [];
+        : hasProductCats
+          ? []
+          : MAIN_CATEGORIES) || [];
 
   const result = new Set<string>(
     base.map((c) => String(c || '').trim()).filter(Boolean)

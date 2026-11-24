@@ -12,12 +12,12 @@ interface CategoryHighlightsProps {
 }
 
 const PALETTE = [
-    { icon: 'fa-cogs', color: 'from-sky-500 to-blue-600' },
-    { icon: 'fa-car-battery', color: 'from-emerald-500 to-teal-600' },
+    { icon: 'fa-shopping-bag', color: 'from-rose-500 to-pink-600' },
     { icon: 'fa-star', color: 'from-amber-500 to-orange-600' },
-    { icon: 'fa-oil-can', color: 'from-indigo-500 to-purple-600' },
-    { icon: 'fa-dot-circle', color: 'from-rose-500 to-pink-600' },
-    { icon: 'fa-wrench', color: 'from-cyan-500 to-sky-600' },
+    { icon: 'fa-gem', color: 'from-fuchsia-500 to-pink-600' },
+    { icon: 'fa-heart', color: 'from-emerald-500 to-teal-600' },
+    { icon: 'fa-tag', color: 'from-indigo-500 to-purple-600' },
+    { icon: 'fa-layer-group', color: 'from-cyan-500 to-sky-600' },
 ];
 
 const CategoryHighlights: React.FC<CategoryHighlightsProps> = ({ setFilters }) => {
