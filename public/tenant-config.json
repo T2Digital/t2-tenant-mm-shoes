@@ -4,7 +4,7 @@
   "slug": "mm-shoes",
   "name": "M&M للأحذية الحريمي والأطفالي",
   "slogan": "متجر إلكتروني للأحذية الحريمي والأطفالي",
-  "logoUrl": "",
+  "logoUrl": "https://i.ibb.co/ZzYMKvsK/29acd8c9b058.jpg",
   "phone": "01013373634",
   "whatsapp": "01013373634",
   "adminEmail": "owner@mm-shoes.t2.app",
@@ -21,7 +21,11 @@
       "category": "أحذية حريمي",
       "subCategory": "سنيكرز",
       "brand": "M&M",
-      "description": "خامة جلد طري ونعل طبي مرن للخروجات والمشي اليومي"
+      "description": "خامة جلد طري ونعل طبي مرن للخروجات والمشي اليومي",
+      "imageUrl": "https://i.ibb.co/RTrPFNcx/6e95099a4594.jpg",
+      "images": [
+        "https://i.ibb.co/RTrPFNcx/6e95099a4594.jpg"
+      ]
     },
     {
       "name": "هيلز كلاسيك سواريه كعب مريح",
@@ -29,7 +33,11 @@
       "category": "أحذية حريمي",
       "subCategory": "سواريه وكلاسيك",
       "brand": "M&M",
-      "description": "تصميم أنيق للمناسبات والعمل بمقاسات 36 إلى 41"
+      "description": "تصميم أنيق للمناسبات والعمل بمقاسات 36 إلى 41",
+      "imageUrl": "https://i.ibb.co/tM0WCtG1/609a40d98dd1.jpg",
+      "images": [
+        "https://i.ibb.co/tM0WCtG1/609a40d98dd1.jpg"
+      ]
     },
     {
       "name": "باليرينا حريمي طبية للمشي والعمل",
@@ -37,7 +45,11 @@
       "category": "أحذية حريمي",
       "subCategory": "باليرينا وفلات",
       "brand": "M&M",
-      "description": "مبطنة بالكامل لراحة القدم طوال اليوم"
+      "description": "مبطنة بالكامل لراحة القدم طوال اليوم",
+      "imageUrl": "https://i.ibb.co/d07fvHMw/2aa3a560044e.jpg",
+      "images": [
+        "https://i.ibb.co/d07fvHMw/2aa3a560044e.jpg"
+      ]
     },
     {
       "name": "كوتشي أطفالى لايت مضيء ومريح",
@@ -45,7 +57,11 @@
       "category": "أحذية أطفالي",
       "subCategory": "كوتشي أطفال",
       "brand": "M&M",
-      "description": "خفيف الوزن بسكوتش سهل الارتداء للأطفال"
+      "description": "خفيف الوزن بسكوتش سهل الارتداء للأطفال",
+      "imageUrl": "https://i.ibb.co/67SsQSnT/d635a95ec1ec.jpg",
+      "images": [
+        "https://i.ibb.co/67SsQSnT/d635a95ec1ec.jpg"
+      ]
     },
     {
       "name": "شوز مدرسي أطفالي جلد طبيعي أسود",
@@ -53,7 +69,11 @@
       "category": "أحذية أطفالي",
       "subCategory": "أحذية مدارس",
       "brand": "M&M",
-      "description": "متين ومقاوم للاحتكاك ومريح للاستخدام المدرسي"
+      "description": "متين ومقاوم للاحتكاك ومريح للاستخدام المدرسي",
+      "imageUrl": "https://i.ibb.co/fGCG5N9C/b4ffb4f242f3.jpg",
+      "images": [
+        "https://i.ibb.co/fGCG5N9C/b4ffb4f242f3.jpg"
+      ]
     },
     {
       "name": "صندل أطفالي صيفي طبي بنعل مانع للانزلاق",
@@ -61,10 +81,15 @@
       "category": "أحذية أطفالي",
       "subCategory": "صنادل أطفال",
       "brand": "M&M",
-      "description": "تهوية ممتازة وحماية كاملة لقدم الطفل"
+      "description": "تهوية ممتازة وحماية كاملة لقدم الطفل",
+      "imageUrl": "https://i.ibb.co/Y7RB7xPT/0aafe0d99b6f.jpg",
+      "images": [
+        "https://i.ibb.co/Y7RB7xPT/0aafe0d99b6f.jpg"
+      ]
     }
   ],
   "templateId": "battah",
   "appTemplate": "products_erp",
-  "ezZelApiBase": "https://t2os.app"
+  "ezZelApiBase": "https://t2os.app",
+  "updatedAt": "2026-11-24T01:02:39.705Z"
 }
